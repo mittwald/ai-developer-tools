@@ -1,8 +1,8 @@
-# ai-hosting
+# mittwald AI hosting
 
 Install scripts for using mittwald AI in tools.
 
-## `install-git-commit-ai.sh`
+## Generate Commit Messages
 
 Installs and configures `cmai` to generate commit messages using mittwald AI.
 
