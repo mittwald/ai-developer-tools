@@ -22,6 +22,7 @@ Good commit messages are important but easy to postpone. AI-assisted generation 
 ### What the installer does
 
 The installer script sets up and configures `cmai` so commit messages can be generated using mittwald AI.
+See https://github.com/mrgoonie/cmai for more details.
 
 ### Quick install
 
