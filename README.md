@@ -30,13 +30,16 @@ See https://github.com/mrgoonie/cmai for more details.
 curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh | bash
 ```
 
+Make sure to run `git init` in your existing repository.
+
 ### Typical workflow
 
-1. Stage your changes (`git add ...`).
-2. Commit your changes, ommitting the commit message (`git commit`).
-3. `cmai` uses mittwald AI to generate a commit message.
-4. Review and adjust the message if needed in your editor.
-5. 🥳
+1. Run `git init` in your existing repository, if not done already.
+2. Stage your changes (`git add ...`).
+3. Commit your changes, ommitting the commit message (`git commit`).
+4. `cmai` uses mittwald AI to generate a commit message.
+5. Review and adjust the message if needed in your editor.
+6. 🥳
 
 ## More tools coming soon
 
