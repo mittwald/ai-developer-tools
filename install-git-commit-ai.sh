@@ -10,6 +10,7 @@ SHA="${3}"
 MAX_ATTEMPTS=3
 TIMEOUT_SECONDS=5
 TIMEOUT_INCREASE_PERCENT=50
+KILL_AFTER_SECONDS=2
 
 COMMIT_MSG=""
 
@@ -32,7 +33,7 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
   attempts=$((attempts + 1))
   echo "> Generating commit message ${attempts}/${MAX_ATTEMPTS} ..." >&2
   if [ -n "${TIMEOUT_BIN}" ]; then
-    RUNNER=("${TIMEOUT_BIN}" "${TIMEOUT_SECONDS}")
+    RUNNER=("${TIMEOUT_BIN}" -k "${KILL_AFTER_SECONDS}" "${TIMEOUT_SECONDS}")
   else
     RUNNER=()
   fi
@@ -40,7 +41,7 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
   if [ "${exitcode}" -eq 0 ] && [ -n "${COMMIT_MSG}" ]; then
     success=1
     echo "> done" >&2; break
-  elif [ "${exitcode}" -eq 124 ]; then
+  elif [ "${exitcode}" -eq 124 ] || [ "${exitcode}" -eq 137 ]; then
     TIMEOUT_SECONDS=$((TIMEOUT_SECONDS + ((TIMEOUT_SECONDS * TIMEOUT_INCREASE_PERCENT + 99) / 100)))
     echo "> Timeout occurred. Increasing timeout to ${TIMEOUT_SECONDS}s..." >&2
   else
