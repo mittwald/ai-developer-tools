@@ -146,7 +146,7 @@ resolve_template_dir() {
   local p="$1"
   case "$p" in
     "~") printf '%s\n' "${HOME}" ;;
-    "~/"*) printf '%s/%s\n' "${HOME}" "${p#~/}" ;;
+    "~/"*) printf '%s/%s\n' "${HOME}" "${p#"~/"}" ;;
     *) printf '%s\n' "$p" ;;
   esac
 }
