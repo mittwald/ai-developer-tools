@@ -283,18 +283,38 @@ else
 fi
 
 if prompt_step "3" "Configure $(code "cmai") to use mittwald AI"; then
-  cmai_cmd=(cmai --use-custom "https://llm.aihosting.mittwald.de/v1" --model "gpt-oss-120b")
+  cmai_extra_body='{"chat_template_kwargs":{"enable_thinking":false}}'
+  cmai_cmd=(cmai --clear-model-options
+            --use-custom "https://llm.aihosting.mittwald.de/v1"
+            --model "Qwen3.8-27B-NVFP4"
+            --temperature 0.7
+            --top-p 0.8
+            --presence-penalty 1.5
+            --max-output-tokens 32768
+            --extra-body "${cmai_extra_body}")
   if [ -n "${cmai_api_key}" ]; then
     cmai_cmd+=(--api-key "${cmai_api_key}")
-    preview_cmd='cmai --use-custom "https://llm.aihosting.mittwald.de/v1"
-         --model      "gpt-oss-120b"
+    preview_cmd='cmai --clear-model-options
+         --use-custom "https://llm.aihosting.mittwald.de/v1"
+         --model      "Qwen3.8-27B-NVFP4"
+         --temperature 0.7
+         --top-p 0.8
+         --presence-penalty 1.5
+         --max-output-tokens 32768
+         --extra-body '"'${cmai_extra_body}'"'
          --api-key    "<redacted>"
          --print-config'
     echo "  ${C_ITALIC}${C_BLUE}>${C_RESET}${C_ITALIC} $(code "${preview_cmd}")${C_RESET}"
   else
     echo "  ${C_YELLOW}No API key set. You can enter the API key later in ${C_CODE}cmai${C_RESET}${C_YELLOW} config.${C_RESET}"
-    preview_cmd='cmai --use-custom "https://llm.aihosting.mittwald.de/v1"
-         --model      "gpt-oss-120b"
+    preview_cmd='cmai --clear-model-options
+         --use-custom "https://llm.aihosting.mittwald.de/v1"
+         --model      "Qwen3.8-27B-NVFP4"
+         --temperature 0.7
+         --top-p 0.8
+         --presence-penalty 1.5
+         --max-output-tokens 32768
+         --extra-body '"'${cmai_extra_body}'"'
          --print-config'
     echo "  ${C_ITALIC}${C_BLUE}>${C_RESET}${C_ITALIC} $(code "${preview_cmd}")${C_RESET}"
   fi
@@ -303,6 +323,9 @@ if prompt_step "3" "Configure $(code "cmai") to use mittwald AI"; then
     echo "  ${C_RED}ERROR:${C_RESET} failed to configure $(code "cmai"). Aborting."
     exit 1
   fi
+  # cmai exits on --print-config before persisting --max-output-tokens, so save it directly.
+  printf '%s\n' 32768 > "${HOME}/.config/git-commit-ai/max_output_tokens"
+  chmod 600 "${HOME}/.config/git-commit-ai/max_output_tokens"
   echo "  ${C_GREEN}Done.${C_RESET}"
 else
   echo "  ${C_RED}Aborting.${C_RESET}"
