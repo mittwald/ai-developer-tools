@@ -32,6 +32,12 @@ curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/in
 
 Make sure to run `git init` in your existing repository.
 
+To install or update without prompts, for example from a script, pass `--non-interactive`. Every step then takes its default answer:
+
+```bash
+curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh | bash -s -- --non-interactive
+```
+
 ### Typical workflow
 
 1. Run `git init` in your existing repository, if not done already.

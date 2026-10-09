@@ -90,6 +90,33 @@ setup_colors() {
 
 setup_colors
 
+usage() {
+  echo "Usage: install-git-commit-ai.sh [--non-interactive]"
+  echo
+  echo "  --non-interactive  Do not prompt; accept the default answer of every step"
+  echo "  -h, --help         Show this help"
+  echo
+  echo "Pass options through a pipe with: curl ... | bash -s -- --non-interactive"
+}
+
+non_interactive=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --non-interactive) non_interactive=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "${C_RED}ERROR:${C_RESET} unknown option: $1"
+      usage
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+is_interactive() {
+  [ "${non_interactive}" -eq 0 ] && { [ -t 0 ] || [ -t 1 ]; }
+}
+
 code() {
   printf '%s%s%s' "${C_CODE}" "$1" "${C_RESET}"
 }
@@ -101,11 +128,15 @@ dim_output() {
 prompt_step() {
   local step="$1"
   local description="$2"
-  local answer
+  local answer='y'
   printf '\n%sStep %s:%s %s\n' "${C_BOLD}${C_CYAN}" "$step" "${C_RESET}" "$description"
-  printf '\n  %sRun this step? [Y/n]:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
-  read -r answer < /dev/tty || true
-  [ -z "${answer:-}" ] && answer='y'
+  if is_interactive; then
+    printf '\n  %sRun this step? [Y/n]:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
+    read -r answer < /dev/tty || true
+    [ -z "${answer:-}" ] && answer='y'
+  else
+    printf '\n  %sRun this step? [Y/n]:%s Y\n' "${C_BOLD}${C_BLUE}" "${C_RESET}"
+  fi
   case "${answer:-}" in
     y|Y|yes|YES) return 0 ;;
     *) return 1 ;;
@@ -113,9 +144,13 @@ prompt_step() {
 }
 
 prompt_confirm() {
-  local answer
-  printf '\n  %sRun this step? [y/N]:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
-  read -r answer < /dev/tty || true
+  local answer=''
+  if is_interactive; then
+    printf '\n  %sRun this step? [y/N]:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
+    read -r answer < /dev/tty || true
+  else
+    printf '\n  %sRun this step? [y/N]:%s N\n' "${C_BOLD}${C_BLUE}" "${C_RESET}"
+  fi
   case "${answer:-}" in
     y|Y|yes|YES) return 0 ;;
     *) return 1 ;;
@@ -157,7 +192,7 @@ prompt_template_dir() {
   local resolved=''
 
   while true; do
-    if [ -t 0 ] || [ -t 1 ]; then
+    if is_interactive; then
       printf '  %sTemplate directory:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
       read -r -e -i "${initial}" input < /dev/tty || true
     else
@@ -169,7 +204,7 @@ prompt_template_dir() {
     resolved="$(resolve_template_dir "${input}")"
     if [ "${resolved#/}" = "${resolved}" ]; then
       echo "  ${C_RED}ERROR:${C_RESET} template directory must be an absolute path."
-      if [ -t 0 ] || [ -t 1 ]; then
+      if is_interactive; then
         continue
       fi
       return 1
@@ -251,7 +286,7 @@ cmai_api_key=''
 if [ -n "${MITTWALD_AI_API_KEY:-}" ]; then
   echo "  ${C_GREEN}Found key in $(code "MITTWALD_AI_API_KEY").${C_RESET}"
   use_env_api_key='y'
-  if [ -t 0 ] || [ -t 1 ]; then
+  if is_interactive; then
     printf '  %sUse key from MITTWALD_AI_API_KEY [Y/n]:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
     read -r use_env_api_key < /dev/tty || true
     [ -z "${use_env_api_key:-}" ] && use_env_api_key='y'
@@ -263,7 +298,7 @@ if [ -n "${MITTWALD_AI_API_KEY:-}" ]; then
       cmai_api_key="${MITTWALD_AI_API_KEY}"
       ;;
     *)
-      if [ -t 0 ] || [ -t 1 ]; then
+      if is_interactive; then
         printf '  %sAPI key (optional):%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
         read -r cmai_api_key < /dev/tty || true
       else
@@ -273,7 +308,7 @@ if [ -n "${MITTWALD_AI_API_KEY:-}" ]; then
       ;;
   esac
 else
-  if [ -t 0 ] || [ -t 1 ]; then
+  if is_interactive; then
     printf '  %sAPI key (optional):%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
     read -r cmai_api_key < /dev/tty || true
   else
@@ -340,7 +375,7 @@ if [ -n "${existing_template_dir}" ]; then
   default_template_dir="${existing_template_dir}"
   use_configured_template_dir='y'
   printf '  %sTemplate directory:%s %s\n' "${C_BOLD}" "${C_RESET}" "$(code "${default_template_dir}")"
-  if [ -t 0 ] || [ -t 1 ]; then
+  if is_interactive; then
     printf '  %sUse configured directory [Y/n]:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
     read -r use_configured_template_dir < /dev/tty || true
     [ -z "${use_configured_template_dir:-}" ] && use_configured_template_dir='y'
@@ -409,9 +444,14 @@ if [ -f "${HOOK_PATH}" ]; then
   printf '\n%sStep %s:%s %s\n' "${C_BOLD}${C_CYAN}" "5" "${C_RESET}" "Write $(code "${DISPLAY_HOOK_PATH}")"
   echo
   echo "  ${C_YELLOW}${C_BOLD}WARNING:${C_RESET}${C_YELLOW} ${C_CODE}${HOOK_PATH}${C_RESET}${C_YELLOW} already exists.${C_RESET}"
-  printf '\n  %sOverwrite? [Y/n]:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
-  read -r overwrite_answer < /dev/tty || true
-  [ -z "${overwrite_answer:-}" ] && overwrite_answer='y'
+  overwrite_answer='y'
+  if is_interactive; then
+    printf '\n  %sOverwrite? [Y/n]:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
+    read -r overwrite_answer < /dev/tty || true
+    [ -z "${overwrite_answer:-}" ] && overwrite_answer='y'
+  else
+    printf '\n  %sOverwrite? [Y/n]:%s Y\n' "${C_BOLD}${C_BLUE}" "${C_RESET}"
+  fi
   case "${overwrite_answer:-}" in
     y|Y|yes|YES)
       mkdir -p "${HOOK_DIR}"
