@@ -113,11 +113,15 @@ if [ "${PLATFORM}" = macos ]; then
   # commands would change the settings of your real keychains.
   case "$(security default-keychain 2>&1 || true)" in
     *"${SANDBOX}"*|*"could not be found"*|'')
-      TEST_KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
+      # Not the name login.keychain-db: macOS unlocks a login keychain with
+      # the password of the user account.
+      TEST_KEYCHAIN="${HOME}/Library/Keychains/tests.keychain-db"
       mkdir -p "${HOME}/Library/Keychains" "${HOME}/Library/Preferences"
       security create-keychain -p test-password "${TEST_KEYCHAIN}"
-      security set-keychain-settings "${TEST_KEYCHAIN}"
-      security unlock-keychain -p test-password "${TEST_KEYCHAIN}"
+      security set-keychain-settings -lut 21600 "${TEST_KEYCHAIN}"
+      # A new keychain is unlocked. The command makes sure of it.
+      security unlock-keychain -p test-password "${TEST_KEYCHAIN}" ||
+        echo "note: security unlock-keychain failed; the tests continue with the new keychain"
       security list-keychains -d user -s "${TEST_KEYCHAIN}"
       security default-keychain -d user -s "${TEST_KEYCHAIN}"
       ;;
