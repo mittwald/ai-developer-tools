@@ -21,6 +21,12 @@ CMAI_INSTALL_DIR="${HOME}/git-commit-ai"
 # Options that this installer and the hook need. Older cmai versions lack them.
 CMAI_REQUIRED_OPTIONS=(--message-only --print-config --use-custom --clear-model-options --max-output-tokens --extra-body)
 CMAI_CONFIG_DIR="${HOME}/.config/git-commit-ai"
+# On Linux and macOS, the hook lives here once. The template directory and the
+# repositories link to it, so that an update of the hook reaches all of them.
+# `git init` and `git clone` copy the link from the template directory.
+HOOK_SOURCE="${CMAI_INSTALL_DIR}/prepare-commit-msg"
+# How deep the installer looks for repositories below a directory of --repos.
+REPO_SEARCH_DEPTH=5
 
 # The system keychain keeps the API key if a keychain exists and the installed
 # cmai takes the key from the environment variable CMAI_API_KEY. The hook finds
@@ -455,6 +461,7 @@ cmai_api_key=''        # the key that the user gave in step 2
 keychain_api_key=''    # the key, if the system keychain keeps it
 template_dir=''
 hook_path=''
+repo_dirs=()           # the directories of --repos
 
 setup_colors() {
   if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -483,11 +490,15 @@ setup_colors() {
 }
 
 usage() {
-  echo "Usage: install-git-commit-ai.sh [--non-interactive]"
+  echo "Usage: install-git-commit-ai.sh [--non-interactive] [--repos DIR]..."
   echo
   echo "  --non-interactive  Do not prompt; accept the default answer of every step."
   echo "                     The default keeps an existing hook from another source"
   echo "                     and does not install a cmai script with unexpected content."
+  echo "  --repos DIR        Look for repositories in DIR (can repeat). A repository"
+  echo "                     with a copy of the hook from this installer gets a link to"
+  echo "                     the hook instead (on Windows: the current hook). The"
+  echo "                     repository in the current directory is always checked."
   echo "  -h, --help         Show this help"
   echo
   echo "Environment:"
@@ -502,6 +513,15 @@ parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --non-interactive) non_interactive=1 ;;
+      --repos)
+        if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+          echo "${C_RED}ERROR:${C_RESET} --repos needs a directory" >&2
+          usage >&2
+          exit 1
+        fi
+        repo_dirs+=("$2")
+        shift
+        ;;
       -h|--help) usage; exit 0 ;;
       *)
         echo "${C_RED}ERROR:${C_RESET} unknown option: $1" >&2
@@ -1361,30 +1381,93 @@ step_template_dir() {
   fi
 }
 
+# True if the hooks are links to HOOK_SOURCE. Windows has no symbolic links
+# without extra rights, so there the template and each repository keep a copy.
+links_hooks() {
+  [ "${PLATFORM}" != windows ]
+}
+
+# True if $1 is a link to HOOK_SOURCE.
+is_hook_link() {
+  [ -L "$1" ] && [ "$(readlink "$1")" = "${HOOK_SOURCE}" ]
+}
+
+# True if $1 is a hook from this installer, also an older one.
+is_installer_hook() {
+  grep -qF -e "${HOOK_SIGNATURE}" -e "${HOOK_SIGNATURE_OLD}" "$1" 2>/dev/null
+}
+
+# True if the hook $1 needs no change.
+hook_is_current() {
+  if links_hooks; then
+    is_hook_link "$1" && [ "$(cat "${HOOK_SOURCE}" 2>/dev/null)" = "$(hook_content)" ]
+  else
+    [ ! -L "$1" ] && [ "$(cat "$1" 2>/dev/null)" = "$(hook_content)" ]
+  fi
+}
+
+# Writes HOOK_SOURCE. A commit that runs the hook meanwhile reads the old or
+# the new file, never a partly written one.
+write_hook_source() {
+  local tmp_hook="${HOOK_SOURCE}.tmp.$$"
+  action "Writing $(code "$(to_tilde_path "${HOOK_SOURCE}")")"
+  if mkdir -p "${CMAI_INSTALL_DIR}" &&
+    hook_content > "${tmp_hook}" &&
+    chmod +x "${tmp_hook}" &&
+    mv -f "${tmp_hook}" "${HOOK_SOURCE}"; then
+    return 0
+  fi
+  rm -f "${tmp_hook}"
+  return 1
+}
+
+# Puts the hook at $1: a link to HOOK_SOURCE, or on Windows a copy.
+# $2 = quiet: do not show the action.
+place_hook() {
+  local target="$1"
+  local quiet="${2:-}"
+  if links_hooks; then
+    [ -n "${quiet}" ] || action "$(code "ln -sf $(to_tilde_path "${HOOK_SOURCE}") $(to_tilde_path "${target}")")"
+    rm -f "${target}" && ln -s "${HOOK_SOURCE}" "${target}"
+  else
+    [ -n "${quiet}" ] || action "Writing $(code "$(to_tilde_path "${target}")")"
+    rm -f "${target}" && hook_content > "${target}" && chmod +x "${target}"
+  fi
+}
+
 step_install_hook() {
   local hook_dir="${template_dir}/hooks"
-  local display_hook_path
+  local display_hook_path title
 
   hook_path="${hook_dir}/prepare-commit-msg"
   display_hook_path="$(to_tilde_path "${hook_path}")"
+  if links_hooks; then
+    title="Link $(code "${display_hook_path}") to $(code "$(to_tilde_path "${HOOK_SOURCE}")")"
+  else
+    title="Write $(code "${display_hook_path}")"
+  fi
 
-  if [ ! -e "${hook_path}" ]; then
-    if ! prompt_step 5 "Write $(code "${display_hook_path}")"; then
-      abort
-    fi
-  elif [ "$(cat "${hook_path}" 2>/dev/null)" = "$(hook_content)" ]; then
-    heading 5 "Write $(code "${display_hook_path}")"
+  if hook_is_current "${hook_path}"; then
+    heading 5 "${title}"
     echo
-    chmod +x "${hook_path}"
     echo "  $(code "${hook_path}") ${C_GREEN}is already up to date.${C_RESET}"
     return 0
-  elif grep -qF -e "${HOOK_SIGNATURE}" -e "${HOOK_SIGNATURE_OLD}" "${hook_path}" 2>/dev/null; then
-    if ! prompt_step 5 "Update $(code "${display_hook_path}")"; then
+  elif [ ! -e "${hook_path}" ] && [ ! -L "${hook_path}" ]; then
+    if ! prompt_step 5 "${title}"; then
+      abort
+    fi
+  elif is_hook_link "${hook_path}" || is_installer_hook "${hook_path}"; then
+    if links_hooks; then
+      title="Update the hook and link $(code "${display_hook_path}") to $(code "$(to_tilde_path "${HOOK_SOURCE}")")"
+    else
+      title="Update $(code "${display_hook_path}")"
+    fi
+    if ! prompt_step 5 "${title}"; then
       abort
     fi
   else
     # A hook from another source. It is not replaced without an explicit yes.
-    heading 5 "Write $(code "${display_hook_path}")"
+    heading 5 "${title}"
     echo
     warning "$(code "${hook_path}")${C_YELLOW} already exists and was not written by this installer."
     echo "  ${C_YELLOW}Overwriting removes your existing hook.${C_RESET}"
@@ -1396,11 +1479,116 @@ step_install_hook() {
     fi
   fi
 
-  action "Installing $(code "${hook_path}")"
-  if ! mkdir -p "${hook_dir}" || ! hook_content > "${hook_path}" || ! chmod +x "${hook_path}"; then
+  if ! mkdir -p "${hook_dir}"; then
+    die "failed to create $(code "${hook_dir}"). Aborting."
+  fi
+  if links_hooks && ! write_hook_source; then
+    die "failed to write $(code "${HOOK_SOURCE}"). Aborting."
+  fi
+  if ! place_hook "${hook_path}"; then
     die "failed to write $(code "${hook_path}"). Aborting."
   fi
   echo "  ${C_GREEN}Done.${C_RESET}"
+}
+
+# Prints the hooks directory of the repository in the current directory and of
+# each repository in the directories of --repos, each once. A repository with
+# its own core.hooksPath keeps its hooks and is left out.
+find_repo_hook_dirs() {
+  local dir git_path repo common_dir
+  {
+    git rev-parse --show-toplevel 2>/dev/null || true
+    for dir in ${repo_dirs[@]+"${repo_dirs[@]}"}; do
+      dir="$(resolve_template_dir "${dir}")"
+      [ -d "${dir}" ] || continue
+      find "${dir}" -maxdepth "${REPO_SEARCH_DEPTH}" \( -name node_modules -o -name vendor \) -prune \
+        -o -name .git -prune -print 2>/dev/null |
+        while IFS= read -r git_path; do
+          dirname "${git_path}"
+        done
+    done
+  } | while IFS= read -r repo; do
+    [ -n "${repo}" ] || continue
+    if git -C "${repo}" config --local --get core.hooksPath >/dev/null 2>&1; then
+      continue
+    fi
+    # Worktrees and submodules resolve to the git directory that keeps the hooks.
+    common_dir="$(cd "${repo}" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd)" ||
+      continue
+    printf '%s/hooks\n' "${common_dir}"
+  done | sort -u
+}
+
+# The number of repositories that step 6 lists by name.
+REPO_LIST_LIMIT=10
+
+step_link_repos() {
+  local hooks_dir hook title
+  local linked=0
+  local shown=0
+  local failed=0
+  local candidates=()
+
+  if links_hooks; then
+    title="Link the hook in your repositories"
+  else
+    title="Update the hook in your repositories"
+  fi
+
+  while IFS= read -r hooks_dir; do
+    hook="${hooks_dir}/prepare-commit-msg"
+    if hook_is_current "${hook}"; then
+      linked=$((linked + 1))
+    elif is_hook_link "${hook}" || is_installer_hook "${hook}"; then
+      candidates+=("${hook}")
+    fi
+  done < <(find_repo_hook_dirs)
+
+  heading 6 "${title}"
+  echo
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    if [ "${#repo_dirs[@]}" -eq 0 ] && [ "${linked}" -eq 0 ]; then
+      echo "  No repository to check. Pass $(code "--repos DIR") to look for repositories in DIR."
+    elif links_hooks; then
+      echo "  ${C_GREEN}No repository has an old copy of the hook${C_RESET} (${linked} linked)."
+    else
+      echo "  ${C_GREEN}No repository has an old copy of the hook${C_RESET} (${linked} up to date)."
+    fi
+    return 0
+  fi
+
+  if links_hooks; then
+    echo "  These repositories have a copy of the hook from this installer. A link"
+    echo "  instead of the copy gets them every future update of the hook:"
+  else
+    echo "  These repositories have an old copy of the hook from this installer:"
+  fi
+  echo
+  for hook in "${candidates[@]}"; do
+    if [ "${shown}" -ge "${REPO_LIST_LIMIT}" ]; then
+      echo "  ... and $((${#candidates[@]} - shown)) more"
+      break
+    fi
+    echo "  $(code "$(to_tilde_path "${hook}")")"
+    shown=$((shown + 1))
+  done
+  echo
+  if ! ask "Run this step?" y; then
+    echo "  ${C_YELLOW}Skipped.${C_RESET}"
+    return 0
+  fi
+  if links_hooks; then
+    action "$(code "ln -sf $(to_tilde_path "${HOOK_SOURCE}") <repository>/.git/hooks/prepare-commit-msg")"
+  else
+    action "Writing $(code "<repository>/.git/hooks/prepare-commit-msg")"
+  fi
+  for hook in "${candidates[@]}"; do
+    if ! place_hook "${hook}" quiet; then
+      warning "failed to write $(code "${hook}")${C_YELLOW}."
+      failed=$((failed + 1))
+    fi
+  done
+  echo "  ${C_GREEN}Done${C_RESET} ($((${#candidates[@]} - failed)) of ${#candidates[@]} repositories)."
 }
 
 step_editor() {
@@ -1411,7 +1599,7 @@ step_editor() {
   kind="$(editor_kind "${editor}")"
 
   if [ "${kind}" = other ]; then
-    heading 6 "Check how your editor aborts a commit"
+    heading 7 "Check how your editor aborts a commit"
     echo
     echo "  ${C_YELLOW}Editor does not look like Vim (git uses${C_RESET} $(code "${editor:-no editor}")${C_YELLOW}).${C_RESET}"
     echo
@@ -1422,7 +1610,7 @@ step_editor() {
   fi
 
   if ! config_path="$(editor_config_path "${kind}")"; then
-    heading 6 "Abort commit on :q! (only for Vim users)"
+    heading 7 "Abort commit on :q! (only for Vim users)"
     echo
     echo "  ${C_YELLOW}Neovim uses${C_RESET} $(code "init.lua")${C_YELLOW} here, so this script cannot add the snippet.${C_RESET}"
     echo "  ${C_YELLOW}To abort a commit on :q, add the snippet by hand, for example inside${C_RESET} $(code "vim.cmd([[ ... ]])")${C_YELLOW}:${C_RESET}"
@@ -1432,7 +1620,7 @@ step_editor() {
   fi
   display_config_path="$(to_tilde_path "${config_path}")"
 
-  heading 6 "Append snippet to $(code "${display_config_path}") to abort commit on :q! (only for Vim users)"
+  heading 7 "Append snippet to $(code "${display_config_path}") to abort commit on :q! (only for Vim users)"
   echo
   if [ -f "${config_path}" ] && grep -q 'augroup GitCommitAbort' "${config_path}"; then
     echo "  ${C_GREEN}Snippet is already present in${C_RESET} $(code "${config_path}")${C_GREEN}; no change needed.${C_RESET}"
@@ -1473,17 +1661,23 @@ step_editor() {
 }
 
 step_manual() {
-  local display_hook_path
-  display_hook_path="$(to_tilde_path "${hook_path}")"
-
-  heading 7 "Manual action required"
+  heading 8 "Manual action required"
   echo
   echo "  ${C_BOLD}Run $(code "git init")${C_BOLD} in each repository where you want this hook template to apply.${C_RESET}"
   echo
   echo "  $(code "git init") does not replace a hook that a repository already has."
-  echo "  To update the hook of such a repository, run this command in the repository:"
+  if links_hooks; then
+    echo "  To link the hook in such a repository, run this command in the repository:"
+    echo
+    echo "  $(code "ln -sf $(to_tilde_path "${HOOK_SOURCE}") \"\$(git rev-parse --git-path hooks)/prepare-commit-msg\"")"
+  else
+    echo "  To update the hook of such a repository, run this command in the repository:"
+    echo
+    echo "  $(code "cp $(to_tilde_path "${hook_path}") \"\$(git rev-parse --git-path hooks)/\"")"
+  fi
   echo
-  echo "  $(code "cp ${display_hook_path} \"\$(git rev-parse --git-path hooks)/\"")"
+  echo "  To do this for all repositories in a directory that have a copy of the"
+  echo "  hook from this installer, run the installer again with $(code "--repos DIR")."
   echo
 }
 
@@ -1502,6 +1696,7 @@ main() {
   step_configure_cmai
   step_template_dir
   step_install_hook
+  step_link_repos
   step_editor
   step_manual
 }

@@ -161,13 +161,17 @@ contains() {
   grep -qF -e "$2" "$1"
 }
 
-# Runs the installer without prompts. The output goes to the log.
+# Runs the installer without prompts. The output goes to the log. $@ = options.
 run_installer() {
-  "${BASH}" "${INSTALLER}" --non-interactive > "${LOG}" 2>&1 < /dev/null
+  "${BASH}" "${INSTALLER}" --non-interactive "$@" > "${LOG}" 2>&1 < /dev/null
 }
 
 installer_fails() {
   ! run_installer
+}
+
+installer_fails_with() {
+  ! run_installer "$@"
 }
 
 # Makes the repository that the installer downloads cmai from. $1 = script.
@@ -249,10 +253,14 @@ make_cmai_repo "${FIXTURE}"
 export MITTWALD_AI_API_KEY="${TEST_KEY}"
 check "installation succeeds" run_installer
 unset MITTWALD_AI_API_KEY
-check "installation reaches the last step" contains "${LOG}" "Step 7"
+check "installation reaches the last step" contains "${LOG}" "Step 8"
 check "cmai is installed" test -x "${HOME}/git-commit-ai/git-commit.sh"
 check "cmai is on the PATH" test "$(command -v cmai)" = "${CMAI_BIN_DIR}/cmai"
 check "hook is in the template directory" test "$(cat "${TEMPLATE_HOOK}")" = "$(hook_content)"
+if [ "${PLATFORM}" != windows ]; then
+  check "template directory has a link to the hook" test "$(readlink "${TEMPLATE_HOOK}")" = "${HOOK_SOURCE}"
+  check "hook can run" test -x "${HOOK_SOURCE}"
+fi
 # shellcheck disable=SC2088
 check "git knows the template directory" test "$(git config --global --get init.templatedir)" = '~/.git-templates'
 check "cmai is configured for mittwald AI" contains "${HOME}/.config/git-commit-ai/base_url" "llm.aihosting.mittwald.de"
@@ -279,6 +287,9 @@ fi
 REPO="${SANDBOX}/repo"
 make_repo "${REPO}"
 check "git init copies the hook into a repository" test -f "${REPO}/.git/hooks/prepare-commit-msg"
+if [ "${PLATFORM}" != windows ]; then
+  check "git init copies the link" test "$(readlink "${REPO}/.git/hooks/prepare-commit-msg")" = "${HOOK_SOURCE}"
+fi
 
 commit() {
   (cd "${REPO}" && git commit) > "${LOG}" 2>&1 < /dev/null
@@ -302,9 +313,12 @@ check "commit without a message stops when cmai fails" commit_fails
 check "hook reports that cmai failed" contains "${LOG}" "No commit message generated: cmai failed (exit 1)"
 check "hook shows the error of cmai" contains "${LOG}" "API request failed (HTTP 401): invalid key"
 
-# A hook with short time limits: 1 second, then 2 seconds.
+# A hook with short time limits: 1 second, then 2 seconds. The hook of the
+# repository is a link; remove it so that sed does not write into the hook.
+rm -f "${REPO}/.git/hooks/prepare-commit-msg"
 sed -e 's/^TIMEOUT_SECONDS=30 /TIMEOUT_SECONDS=1 /' -e 's/^MAX_ATTEMPTS=3/MAX_ATTEMPTS=2/' \
   "${TEMPLATE_HOOK}" > "${REPO}/.git/hooks/prepare-commit-msg"
+chmod +x "${REPO}/.git/hooks/prepare-commit-msg"
 export FAKE_CMAI_MODE=hang
 export FAKE_CMAI_HEARTBEAT="${SANDBOX}/heartbeat"
 : > "${FAKE_CMAI_HEARTBEAT}"
@@ -331,14 +345,54 @@ else
   check "second installation keeps the key file" test "$(cat "${KEY_FILE}")" = "${TEST_KEY}"
 fi
 
+# Remove the link first, so that the next lines do not write into the hook.
+rm -f "${TEMPLATE_HOOK}"
 printf '#!/bin/sh\necho "hook of the user"\n' > "${TEMPLATE_HOOK}"
 check "installation stops at a hook from another source" installer_fails
 check "installation names the reason" contains "${LOG}" "was not written by this installer"
 check "hook from another source is kept" contains "${TEMPLATE_HOOK}" "hook of the user"
 
+rm -f "${TEMPLATE_HOOK}"
 printf '#!/bin/sh\nexec cmai --message-only\n' > "${TEMPLATE_HOOK}"
 check "installation updates an older hook of this installer" run_installer
 check "older hook is replaced" test "$(cat "${TEMPLATE_HOOK}")" = "$(hook_content)"
+if [ "${PLATFORM}" != windows ]; then
+  check "older hook is replaced with a link" test "$(readlink "${TEMPLATE_HOOK}")" = "${HOOK_SOURCE}"
+fi
+
+# ----------------------------------------------------------------------------
+# Hooks in existing repositories
+# ----------------------------------------------------------------------------
+REPOS="${SANDBOX}/repos"
+rm -rf "${REPOS}"
+# A copy of the hook from an older installer, a hook from another source and
+# a repository without the hook.
+make_repo "${REPOS}/group/old-copy"
+rm -f "${REPOS}/group/old-copy/.git/hooks/prepare-commit-msg"
+printf '#!/bin/sh\nexec cmai --message-only\n' > "${REPOS}/group/old-copy/.git/hooks/prepare-commit-msg"
+make_repo "${REPOS}/other-hook"
+rm -f "${REPOS}/other-hook/.git/hooks/prepare-commit-msg"
+printf '#!/bin/sh\necho "hook of the user"\n' > "${REPOS}/other-hook/.git/hooks/prepare-commit-msg"
+make_repo "${REPOS}/no-hook"
+rm -f "${REPOS}/no-hook/.git/hooks/prepare-commit-msg"
+# A repository with its own hooks directory.
+make_repo "${REPOS}/own-hooks-path"
+git -C "${REPOS}/own-hooks-path" config core.hooksPath .githooks
+rm -f "${REPOS}/own-hooks-path/.git/hooks/prepare-commit-msg"
+printf '#!/bin/sh\nexec cmai --message-only\n' > "${REPOS}/own-hooks-path/.git/hooks/prepare-commit-msg"
+
+check "installation with --repos succeeds" run_installer --repos "${REPOS}"
+check "installation lists the old copy" contains "${LOG}" "old-copy/.git/hooks/prepare-commit-msg"
+check "old copy has the current hook" test "$(cat "${REPOS}/group/old-copy/.git/hooks/prepare-commit-msg")" = "$(hook_content)"
+if [ "${PLATFORM}" != windows ]; then
+  check "old copy is replaced with a link" test "$(readlink "${REPOS}/group/old-copy/.git/hooks/prepare-commit-msg")" = "${HOOK_SOURCE}"
+fi
+check "hook from another source in a repository is kept" contains "${REPOS}/other-hook/.git/hooks/prepare-commit-msg" "hook of the user"
+check "repository without the hook stays without it" test ! -e "${REPOS}/no-hook/.git/hooks/prepare-commit-msg"
+check "repository with its own core.hooksPath is left alone" contains "${REPOS}/own-hooks-path/.git/hooks/prepare-commit-msg" "exec cmai --message-only"
+check "second installation with --repos succeeds" run_installer --repos "${REPOS}"
+check "second installation finds no old copy" contains "${LOG}" "No repository has an old copy of the hook (1 "
+check "--repos without a directory fails" installer_fails_with --repos
 
 if [ "${use_keychain}" -eq 1 ]; then
   # A key in the key file, as an installation before the keychain support left it.

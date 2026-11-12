@@ -29,8 +29,9 @@ The installer shows each change before it applies the change:
 1. Installs the latest `cmai`, if `cmai` is missing or too old. The installer first checks the downloaded script for content that `cmai` has no need for, such as unknown hosts or encoded code, and asks before it installs a script with such content. This check is a heuristic, not a guarantee. The installer needs `sudo` only if it cannot write the link `/usr/local/bin/cmai` itself.
 2. Asks for your mittwald AI API key, or takes the key from `MITTWALD_AI_API_KEY`, and stores the key (see [Where the API key is stored](#where-the-api-key-is-stored)).
 3. Configures `cmai` to use mittwald AI.
-4. Installs a `prepare-commit-msg` hook into your git template directory (default `~/.git-templates`).
-5. Optionally adds a snippet to your Vim config, so that `:q` aborts the commit.
+4. Installs a `prepare-commit-msg` hook into your git template directory (default `~/.git-templates`). On Linux and macOS, the hook is in `~/git-commit-ai/prepare-commit-msg` and the template directory has a link to it. `git init` and `git clone` copy this link into a repository, so that an update of the hook reaches every repository.
+5. Replaces copies of the hook from this installer with links, in the repository of the current directory and in the repositories below each directory of `--repos` (see [Update the hook in your repositories](#update-the-hook-in-your-repositories)). On Windows, it updates these copies instead.
+6. Optionally adds a snippet to your Vim config, so that `:q` aborts the commit.
 
 ### Supported systems
 
@@ -81,7 +82,23 @@ To install or update without prompts, for example from a script, pass `--non-int
 curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh | bash -s -- --non-interactive
 ```
 
-`git init` does not replace a hook that a repository already has. After an update of the installer, copy the new hook into such a repository:
+### Update the hook in your repositories
+
+`git init` does not replace a hook that a repository already has. A repository with a copy of the hook from an older installer keeps that copy. To replace these copies with links to the hook, pass the directories with your repositories to `--repos`:
+
+```bash
+curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh | bash -s -- --repos ~/workspace
+```
+
+The installer looks for repositories up to 5 levels below each directory. It changes only hooks from this installer. A repository without the hook, with a hook from another source, or with its own `core.hooksPath` stays as it is.
+
+To link the hook in one repository, run this command in the repository:
+
+```bash
+ln -sf ~/git-commit-ai/prepare-commit-msg "$(git rev-parse --git-path hooks)/prepare-commit-msg"
+```
+
+On Windows, copy the hook instead:
 
 ```bash
 cp ~/.git-templates/hooks/prepare-commit-msg "$(git rev-parse --git-path hooks)/"
