@@ -15,7 +15,7 @@ AI-powered, well-formed git commit message generation based on your staged chang
 
 Good commit messages are important but easy to postpone. AI-assisted generation helps you:
 - keep commit history understandable and review-friendly
-- consistentely follow the [Conventional Commits](https://www.conventionalcommits.org/) format
+- consistently follow the [Conventional Commits](https://www.conventionalcommits.org/) format
 - reduce time spent writing commit text
 - improve consistency across contributors
 
@@ -23,6 +23,16 @@ Good commit messages are important but easy to postpone. AI-assisted generation 
 
 The installer script sets up and configures `cmai` so commit messages can be generated using mittwald AI.
 See https://github.com/mrgoonie/cmai for more details.
+
+The installer shows each change before it applies the change:
+
+1. Installs the latest `cmai`, if `cmai` is missing or too old. The installer first checks the downloaded script for content that `cmai` has no need for, such as unknown hosts or encoded code, and asks before it installs a script with such content. This check is a heuristic, not a guarantee. The installer needs `sudo` only if it cannot write the link `/usr/local/bin/cmai` itself.
+2. Asks for your mittwald AI API key, or takes the key from `MITTWALD_AI_API_KEY`. The key is stored in `~/.config/git-commit-ai/config`, readable only by you.
+3. Configures `cmai` to use mittwald AI.
+4. Installs a `prepare-commit-msg` hook into your git template directory (default `~/.git-templates`).
+5. Optionally adds a snippet to your Vim config, so that `:q` aborts the commit.
+
+Requirements: Linux, `bash`, `git`, `curl` and `jq`.
 
 ### Quick install
 
@@ -32,20 +42,41 @@ curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/in
 
 Make sure to run `git init` in your existing repository.
 
-To install or update without prompts, for example from a script, pass `--non-interactive`. Every step then takes its default answer:
+To read the script before you run it, download the script first:
+
+```bash
+curl -fsSLO https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh
+less install-git-commit-ai.sh
+bash install-git-commit-ai.sh
+```
+
+To install or update without prompts, for example from a script, pass `--non-interactive`. Every step then takes its default answer. The default answer keeps an existing `prepare-commit-msg` hook from another source and does not install a `cmai` script with unexpected content. In both cases the installer stops.
 
 ```bash
 curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh | bash -s -- --non-interactive
+```
+
+`git init` does not replace a hook that a repository already has. After an update of the installer, copy the new hook into such a repository:
+
+```bash
+cp ~/.git-templates/hooks/prepare-commit-msg "$(git rev-parse --git-path hooks)/"
 ```
 
 ### Typical workflow
 
 1. Run `git init` in your existing repository, if not done already.
 2. Stage your changes (`git add ...`).
-3. Commit your changes, ommitting the commit message (`git commit`).
+3. Commit your changes, omitting the commit message (`git commit`).
 4. `cmai` uses mittwald AI to generate a commit message.
 5. Review and adjust the message if needed in your editor.
 6. 🥳
+
+### Good to know
+
+- The hook sends the diff of your staged changes to mittwald AI. Do not stage secrets.
+- The hook never blocks a commit. It tries up to 3 times, with time limits of 30, 45 and 68 seconds. If the generation fails, the hook prints the reason and your editor opens without a generated message.
+- While you wait, the hook shows a status line such as `1/3 Reading between the hunks...`. The bold, fully colored part of the line grows with the elapsed share of the time limit. Set `NO_COLOR=1` for plain text.
+- Press `Ctrl-C` to stop the generation and the commit.
 
 ## More tools coming soon
 
