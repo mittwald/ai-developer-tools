@@ -299,6 +299,10 @@ commit_fails() {
 }
 
 check "commit with a generated message succeeds" commit
+hook_reports_done() {
+  grep -qE '^[A-Z][^|]*\.\.\. [^|]+[.!]$' "${LOG}" && ! contains "${LOG}" "Generated commit message"
+}
+check "hook ends with the status text and a remark" hook_reports_done
 check "commit has the generated subject" test "$(git -C "${REPO}" log -1 --format=%s)" = "feat(test): generated message"
 git -C "${REPO}" log -1 --format=%b > "${SANDBOX}/body"
 check "cmai gets the API key" contains "${SANDBOX}/body" "api-key=${TEST_KEY}"

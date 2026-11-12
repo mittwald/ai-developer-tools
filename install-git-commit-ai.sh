@@ -98,60 +98,63 @@ case "${SOURCE}" in
 esac
 [ -n "${MSG_FILE}" ] || exit 0
 
-# Status texts, shown as "1/3 <text>...". ASCII only, no line longer than 72.
+# Status texts with a remark, as "text|remark". While cmai runs, the line
+# shows "1/3 <text>...". When cmai is done, it becomes "<text>... <remark>".
+# ASCII only, no line longer than 72 (text and remark together).
 MESSAGES=(
-  'Asking the diff what it did this time'
-  'Translating your changes into human'
-  'Teaching the model to say "fix" politely'
-  'Squinting at your staged changes'
-  'Pretending this was the plan all along'
-  'Turning chaos into Conventional Commits'
-  'Finding a nicer word for "oops"'
-  'Counting the files you swear you never touched'
-  'Blaming the previous commit'
-  'Resisting the urge to write "misc changes"'
-  'Consulting the commit message oracle'
-  'Reading your diff so the reviewers can skim it'
-  'Making "wip" sound professional'
-  'Flipping a coin between feat and fix'
-  'Brewing a fresh subject line'
-  'Squeezing three hours into seventy characters'
-  'Looking for the why behind the what'
-  'Polishing the imperative mood'
-  'Negotiating with the linter in advance'
-  'Hiding the evidence of trial and error'
-  'Asking the GPUs for their honest opinion'
-  'Convincing the model that the tabs were intended'
-  'Composing a haiku, then deleting it'
-  'Removing "finally works" from the draft'
-  'Inventing a scope that sounds official'
-  'Giving your typo fix the gravitas it deserves'
-  'Checking whether this counts as a refactor'
-  'Skipping the part where it says "stuff"'
-  'Writing history, one line at a time'
-  'Explaining it to your future self'
-  'Dressing up the diff for code review'
-  'Rounding "quick fix" up to "improvement"'
-  'Decoding what "temp2_final" was supposed to mean'
-  'Warming up the tokens'
-  'Deciding this is definitely not a breaking change'
-  'Searching for a verb that is not "update"'
-  'Reticulating commit splines'
-  'Fitting an epic into the subject line'
-  'Taking credit for what the compiler made you do'
-  'Preparing your alibi for git blame'
-  'Asking mittwald AI very nicely'
-  'Thinking in German, answering in English'
-  'Making the changelog proud'
-  'Distilling your diff into one honest sentence'
-  'Arguing with itself about the scope'
-  'Promising the reviewers it is a small change'
-  'Steering clear of "various improvements"'
-  'Reading between the hunks'
-  'Editing the swear words out of the summary'
-  'Trusting that the tests passed'
+  'Asking the diff what it did this time|It confessed.'
+  'Translating your changes into human|Fluent now.'
+  'Teaching the model to say "fix" politely|Manners acquired.'
+  'Squinting at your staged changes|Eyes adjusted.'
+  'Pretending this was the plan all along|Nobody suspects a thing.'
+  'Turning chaos into Conventional Commits|Order restored!'
+  'Finding a nicer word for "oops"|Found one.'
+  'Counting the files you swear you never touched|Your secret is safe.'
+  'Blaming the previous commit|Case closed.'
+  'Resisting the urge to write "misc changes"|Resisted!'
+  'Consulting the commit message oracle|The oracle has spoken.'
+  'Reading your diff so the reviewers can skim it|Skimmable now.'
+  'Making "wip" sound professional|Very professional.'
+  'Flipping a coin between feat and fix|It landed.'
+  'Brewing a fresh subject line|Served hot!'
+  'Squeezing three hours into seventy characters|Squeezed.'
+  'Looking for the why behind the what|Found the why.'
+  'Polishing the imperative mood|Shiny!'
+  'Negotiating with the linter in advance|Deal signed.'
+  'Hiding the evidence of trial and error|No evidence left.'
+  'Asking the GPUs for their honest opinion|They approve.'
+  'Convincing the model that the tabs were intended|Convinced.'
+  'Composing a haiku, then deleting it|It was beautiful.'
+  'Removing "finally works" from the draft|And it finally works.'
+  'Inventing a scope that sounds official|Very official.'
+  'Giving your typo fix the gravitas it deserves|Gravitas applied.'
+  'Checking whether this counts as a refactor|The verdict is in.'
+  'Skipping the part where it says "stuff"|Stuff skipped.'
+  'Writing history, one line at a time|History written.'
+  'Explaining it to your future self|Future you says thanks!'
+  'Dressing up the diff for code review|Looking sharp!'
+  'Rounding "quick fix" up to "improvement"|Rounded up.'
+  'Decoding what "temp2_final" was supposed to mean|Decoded, mostly.'
+  'Warming up the tokens|Nice and toasty.'
+  'Deciding this is definitely not a breaking change|Probably.'
+  'Searching for a verb that is not "update"|Verb found!'
+  'Reticulating commit splines|Splines reticulated.'
+  'Fitting an epic into the subject line|It fits!'
+  'Taking credit for what the compiler made you do|Credit taken.'
+  'Preparing your alibi for git blame|Alibi airtight.'
+  'Asking mittwald AI very nicely|It said yes!'
+  'Thinking in German, answering in English|Fertig. Done.'
+  'Making the changelog proud|The changelog is beaming.'
+  'Distilling your diff into one honest sentence|Mostly honest.'
+  'Arguing with itself about the scope|It won.'
+  'Promising the reviewers it is a small change|Pinky promise.'
+  'Steering clear of "various improvements"|Steered clear.'
+  'Reading between the hunks|Read it all.'
+  'Editing the swear words out of the summary|Squeaky clean.'
+  'Trusting that the tests passed|Fingers crossed!'
 )
-MESSAGE_FRAMES=30   # frames until the next text, about 3 seconds
+FRAMES_PER_SECOND=20
+MESSAGE_FRAMES=60   # frames until the next text, about 3 seconds
 
 # On a terminal, the status is one line that is rewritten in place.
 if [ -t 2 ] && [ "${TERM:-dumb}" != "dumb" ]; then
@@ -162,11 +165,13 @@ fi
 if [ "${LIVE}" -eq 1 ] && [ -z "${NO_COLOR:-}" ]; then
   COLOR=1
   C_DIM=$'\033[2m'
+  C_FAINT=$'\033[0;2;38;2;128;128;128m'   # the slash of the attempt counter
   C_RED=$'\033[31m'
   C_RESET=$'\033[0m'
 else
   COLOR=0
   C_DIM=''
+  C_FAINT=''
   C_RED=''
   C_RESET=''
 fi
@@ -204,15 +209,17 @@ build_gradient() {
   done
 }
 
-# Draws the status line. $1 = attempt counter, $2 = text, $3 = frame number,
-# $4 = number of text characters in full color.
+# Draws the status line. $1 = attempt counter such as 1/3 (empty for none),
+# $2 = text, $3 = frame number, $4 = number of text characters in full color.
 draw() {
   local text="$2"
   local length=${#2}
   local line=''
   local i step
   if [ "${COLOR}" -eq 1 ]; then
-    line="${C_DIM}$1 "
+    if [ -n "$1" ]; then
+      line="${C_DIM}${1%%/*}${C_FAINT}/${C_DIM}${1#*/} "
+    fi
     for ((i = 0; i < length; i++)); do
       step=$(( (i * GRADIENT_SIZE / length + GRADIENT_SIZE - $3 * 2 % GRADIENT_SIZE) % GRADIENT_SIZE ))
       if [ "${i}" -lt "$4" ]; then
@@ -223,9 +230,22 @@ draw() {
     done
     line+="${C_RESET}"
   else
-    line="$1 ${text}"
+    line="${1:+$1 }${text}"
   fi
   printf '\r%s\033[K' "${line}" >&2
+}
+
+# Replaces the status line with the status text in full color and the remark
+# that says that cmai is done. $1 = index in MESSAGES, $2 = frame number.
+finish_done() {
+  local text="${MESSAGES[$1]%%|*}..."
+  local remark="${MESSAGES[$1]#*|}"
+  if [ "${LIVE}" -eq 1 ]; then
+    draw '' "${text}" "$2" "${#text}"
+    printf ' %s\n' "${remark}" >&2
+  else
+    printf '%s %s\n' "${text}" "${remark}" >&2
+  fi
 }
 
 # Replaces the status line with a final line. $1 = color, $2 = text.
@@ -329,7 +349,7 @@ ERR_FILE="${WORK_DIR}/err"
 child=''
 
 tick() {
-  sleep 0.1 2>/dev/null || sleep 1
+  sleep 0.05 2>/dev/null || sleep 1
 }
 
 # Sends a signal to cmai and to the processes that cmai started. $1 = signal.
@@ -371,6 +391,7 @@ exitcode=0
 while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
   attempts=$((attempts + 1))
   message_start=$((RANDOM % ${#MESSAGES[@]}))
+  message_index="${message_start}"
   started="${SECONDS}"
   timed_out=0
   frame=0
@@ -382,7 +403,7 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
   child=$!
   set +m
   if [ "${LIVE}" -eq 0 ]; then
-    printf '%s/%s %s...\n' "${attempts}" "${MAX_ATTEMPTS}" "${MESSAGES[message_start]}" >&2
+    printf '%s/%s %s...\n' "${attempts}" "${MAX_ATTEMPTS}" "${MESSAGES[message_start]%%|*}" >&2
   fi
 
   while kill -0 "${child}" 2>/dev/null; do
@@ -390,7 +411,7 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
     if [ "${elapsed}" -ge "${TIMEOUT_SECONDS}" ]; then
       timed_out=1
       signal_cmai TERM
-      grace=$((KILL_AFTER_SECONDS * 10))
+      grace=$((KILL_AFTER_SECONDS * FRAMES_PER_SECOND))
       while [ "${grace}" -gt 0 ] && kill -0 "${child}" 2>/dev/null; do
         tick
         grace=$((grace - 1))
@@ -400,7 +421,10 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
     fi
     if [ "${LIVE}" -eq 1 ]; then
       if [ $((frame % MESSAGE_FRAMES)) -eq 0 ]; then
-        text="${MESSAGES[(message_start + frame / MESSAGE_FRAMES * 7) % ${#MESSAGES[@]}]}..."
+        # Every MESSAGE_FRAMES frames the next text; the integer division is intended.
+        # shellcheck disable=SC2017
+        message_index=$(( (message_start + frame / MESSAGE_FRAMES * 7) % ${#MESSAGES[@]} ))
+        text="${MESSAGES[message_index]%%|*}..."
       fi
       draw "${attempts}/${MAX_ATTEMPTS}" "${text}" "${frame}" "$((elapsed * ${#text} / TIMEOUT_SECONDS))"
     fi
@@ -427,7 +451,7 @@ COMMIT_MSG="$(tr -d '\r' < "${OUT_FILE}")"
 
 if { printf '%s\n' "${COMMIT_MSG}"; cat "${MSG_FILE}"; } > "${MSG_FILE}.tmp" &&
   mv "${MSG_FILE}.tmp" "${MSG_FILE}"; then
-  finish "${C_DIM}" "Generated commit message (${SECONDS}s)"
+  finish_done "${message_index}" "${frame}"
 else
   rm -f "${MSG_FILE}.tmp"
   fail "could not write ${MSG_FILE}"

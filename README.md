@@ -117,7 +117,7 @@ cp ~/.git-templates/hooks/prepare-commit-msg "$(git rev-parse --git-path hooks)/
 
 - The hook sends the diff of your staged changes to mittwald AI. Do not stage secrets.
 - The hook never blocks a commit. It tries up to 3 times, with time limits of 30, 45 and 68 seconds. If the generation fails, the hook prints the reason and your editor opens without a generated message.
-- While you wait, the hook shows a status line such as `1/3 Reading between the hunks...`. The bold, fully colored part of the line grows with the elapsed share of the time limit. Set `NO_COLOR=1` for plain text.
+- While you wait, the hook shows a status line such as `1/3 Reading between the hunks...`. The bold, fully colored part of the line grows with the elapsed share of the time limit. When the message is ready, the line becomes `Reading between the hunks... Read it all.`. Set `NO_COLOR=1` for plain text.
 - Press `Ctrl-C` to stop the generation and the commit.
 
 ## More tools coming soon
