@@ -339,6 +339,36 @@ run_installer_from_pipe() {
 }
 check "second installation succeeds from a pipe" run_installer_from_pipe
 check "second installation keeps the hook" contains "${LOG}" "is already up to date"
+check "second installation finds that cmai is the latest" contains "${LOG}" "is the latest version"
+
+# A newer cmai in the repository
+cp "${FIXTURE}" "${SANDBOX}/newer-cmai.sh"
+echo '# a newer version' >> "${SANDBOX}/newer-cmai.sh"
+make_cmai_repo "${SANDBOX}/newer-cmai.sh"
+check "installation with a newer cmai succeeds" run_installer
+check "installation reports the newer cmai" contains "${LOG}" "A newer cmai is available"
+check "newer cmai is installed" contains "${HOME}/git-commit-ai/git-commit.sh" "# a newer version"
+check "cmai on the PATH is the newer one" contains "${CMAI_BIN_DIR}/cmai" "# a newer version"
+
+# A newer cmai with unexpected content
+make_cmai_repo "${SANDBOX}/tampered.sh"
+check "installation with a newer cmai with unexpected content succeeds" run_installer
+check "installation lists the unexpected content of the newer cmai" contains "${LOG}" "does not look as expected"
+check "installed cmai is kept" contains "${HOME}/git-commit-ai/git-commit.sh" "# a newer version"
+installed_cmai_is_clean() {
+  ! contains "${HOME}/git-commit-ai/git-commit.sh" "evil.example"
+}
+check "newer cmai with unexpected content is not installed" installed_cmai_is_clean
+
+# No connection to the repository of cmai
+real_cmai_repo="${CMAI_REPO}"
+export CMAI_REPO="${SANDBOX}/missing-repo"
+check "installation without a connection to the cmai repository succeeds" run_installer
+check "installation reports the failed download" contains "${LOG}" "failed to download cmai"
+check "installed cmai is kept without a connection" contains "${HOME}/git-commit-ai/git-commit.sh" "# a newer version"
+export CMAI_REPO="${real_cmai_repo}"
+make_cmai_repo "${FIXTURE}"
+check "installation goes back to the cmai of the repository" run_installer
 if [ "${use_keychain}" -eq 1 ]; then
   check "second installation keeps the key in the keychain" test "$(keychain_get)" = "${TEST_KEY}"
 else
@@ -411,7 +441,7 @@ if [ "${use_keychain}" -eq 1 ]; then
   check "key moves back into the key file" test "$(cat "${KEY_FILE}")" = "${TEST_KEY}"
   check "hook stops reading the keychain" test ! -e "${KEYCHAIN_FILE}"
   check "next installation succeeds" run_installer
-  check "installer looks for a newer cmai" contains "${LOG}" "Look for a newer cmai?"
+  check "installer finds that the installed cmai is the latest" contains "${LOG}" "is the latest version"
   check "installer keeps a cmai that is the latest" contains "${LOG}" "The latest cmai cannot do this either"
   check "key stays in the key file" test "$(cat "${KEY_FILE}")" = "${TEST_KEY}"
 fi

@@ -457,6 +457,7 @@ non_interactive=0
 tmp_dir=''
 cmai_path=''           # the cmai script in use
 downloaded_script=''
+cmai_is_latest=0       # 1 if the installed cmai is the same as the latest one
 cmai_api_key=''        # the key that the user gave in step 2
 keychain_api_key=''    # the key, if the system keychain keeps it
 template_dir=''
@@ -1049,8 +1050,10 @@ check_requirements() {
 # Downloads the latest cmai into a temporary directory and checks the script.
 # Sets downloaded_script. Fails if the user does not accept a script with
 # unexpected content.
-download_cmai() {
-  local src_dir findings finding commit
+# Downloads the latest cmai into a temporary directory and sets
+# downloaded_script. Returns 1 if the download fails.
+fetch_cmai() {
+  local src_dir
 
   if ! command -v mktemp >/dev/null 2>&1; then
     error "mktemp is required to install $(code "cmai")."
@@ -1064,10 +1067,16 @@ download_cmai() {
   action "$(code "git clone --depth 1 ${CMAI_REPO} ${src_dir}")"
   if ! git clone --quiet --depth 1 --template= "${CMAI_REPO}" "${src_dir}" < /dev/null 2>&1 | dim_output ||
     [ ! -f "${downloaded_script}" ]; then
-    die "failed to download $(code "cmai"). Please install it manually first and re-run this script. Aborting."
+    return 1
   fi
+}
 
-  commit="$(git -C "${src_dir}" log -1 --format='%h from %cd' --date=short 2>/dev/null || true)"
+# Checks the downloaded cmai and shows what the check found. Returns 1 if the
+# script has unexpected content.
+check_downloaded_cmai() {
+  local findings finding commit
+
+  commit="$(git -C "$(dirname "${downloaded_script}")" log -1 --format='%h from %cd' --date=short 2>/dev/null || true)"
   action "Checking $(code "git-commit.sh") (commit ${commit:-unknown}) for unexpected content"
   findings="$(cmai_script_findings "${downloaded_script}")"
   if [ -z "${findings}" ]; then
@@ -1081,7 +1090,14 @@ download_cmai() {
   done <<< "${findings}"
   echo "  ${C_YELLOW}Review ${CMAI_REPO%.git} before you continue.${C_RESET}"
   echo
-  ask "Install this script anyway?" n
+  return 1
+}
+
+download_cmai() {
+  if ! fetch_cmai; then
+    die "failed to download $(code "cmai"). Please install it manually first and re-run this script. Aborting."
+  fi
+  check_downloaded_cmai || ask "Install this script anyway?" n
 }
 
 remove_download() {
@@ -1124,6 +1140,7 @@ step_install_cmai() {
     heading 1 "Install $(code "cmai")"
     echo
     echo "  $(code "cmai") ${C_GREEN}is already installed.${C_RESET}"
+    update_installed_cmai
     update_cmai_for_keychain
     return 0
   fi
@@ -1143,6 +1160,46 @@ step_install_cmai() {
   install_downloaded_cmai
 }
 
+# Updates a cmai that this installer (or the install script of cmai) installed
+# to the latest version, if the latest version differs and the content check
+# finds nothing. cmai has no version number, so a different script counts as a
+# newer one. A cmai from another source stays as it is. A failed download keeps
+# the installed cmai.
+update_installed_cmai() {
+  local installed="${CMAI_INSTALL_DIR}/git-commit.sh"
+
+  if [ ! -f "${installed}" ] || ! cmp -s "${cmai_path}" "${installed}"; then
+    echo "  ${C_DIM}$(code "${cmai_path}")${C_DIM} is not from this installer and is not updated.${C_RESET}"
+    return 0
+  fi
+  echo
+  echo "  Looking for a newer $(code "cmai")."
+  if ! fetch_cmai; then
+    warning "failed to download $(code "cmai")${C_YELLOW}. Keeping the installed cmai."
+    remove_download
+    return 0
+  fi
+  if cmp -s "${downloaded_script}" "${installed}"; then
+    cmai_is_latest=1
+    echo "  $(code "cmai") ${C_GREEN}is the latest version.${C_RESET}"
+    remove_download
+    return 0
+  fi
+  echo "  A newer $(code "cmai") is available."
+  if ! check_downloaded_cmai; then
+    echo "  ${C_YELLOW}Keeping the installed cmai.${C_RESET}"
+    remove_download
+    return 0
+  fi
+  if ! ask "Update cmai?" y; then
+    echo "  ${C_YELLOW}Keeping the installed cmai.${C_RESET}"
+    remove_download
+    return 0
+  fi
+  install_downloaded_cmai
+  cmai_is_latest=1
+}
+
 # The system keychain can keep the API key only if cmai takes the key from the
 # environment. If the installed cmai cannot do that, a newer one may.
 update_cmai_for_keychain() {
@@ -1151,6 +1208,10 @@ update_cmai_for_keychain() {
   fi
   echo
   echo "  The installed cmai cannot take the API key from the $(keychain_title)."
+  if [ "${cmai_is_latest}" -eq 1 ]; then
+    echo "  ${C_YELLOW}The latest cmai cannot do this either. The API key stays in a file that only you can read.${C_RESET}"
+    return 0
+  fi
   if ! ask "Look for a newer cmai?" y; then
     return 0
   fi

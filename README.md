@@ -26,7 +26,7 @@ See https://github.com/mrgoonie/cmai for more details.
 
 The installer shows each change before it applies the change:
 
-1. Installs the latest `cmai`, if `cmai` is missing or too old. The installer first checks the downloaded script for content that `cmai` has no need for, such as unknown hosts or encoded code, and asks before it installs a script with such content. This check is a heuristic, not a guarantee. The installer needs `sudo` only if it cannot write the link `/usr/local/bin/cmai` itself.
+1. Installs the latest `cmai`, if `cmai` is missing or too old. If this installer or the install script of `cmai` installed `cmai`, a newer version replaces it: `cmai` has no version number, so the installer compares the installed script with the latest one. The installer first checks the downloaded script for content that `cmai` has no need for, such as unknown hosts or encoded code, and asks before it installs a script with such content. A newer version with such content does not replace the installed `cmai`, and a failed download keeps it. This check is a heuristic, not a guarantee. The installer needs `sudo` only if it cannot write the link `/usr/local/bin/cmai` itself.
 2. Asks for your mittwald AI API key, or takes the key from `MITTWALD_AI_API_KEY`, and stores the key (see [Where the API key is stored](#where-the-api-key-is-stored)).
 3. Configures `cmai` to use mittwald AI.
 4. Installs a `prepare-commit-msg` hook into your git template directory (default `~/.git-templates`). On Linux and macOS, the hook is in `~/git-commit-ai/prepare-commit-msg` and the template directory has a link to it. `git init` and `git clone` copy this link into a repository, so that an update of the hook reaches every repository.
