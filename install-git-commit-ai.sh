@@ -754,23 +754,36 @@ keychain_title() {
   esac
 }
 
-# Runs a command with a time limit where the timeout tool exists. A locked
-# keyring can wait for a password dialog that nobody sees.
+# Runs a command with a time limit of 20 seconds and with the stdin of the
+# caller. A keychain tool can wait for a dialog that nobody sees, for example
+# in an SSH session or without a default keychain.
 limited() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 20 "$@"
-  else
-    "$@"
-  fi
+  local pid
+  local started="${SECONDS}"
+  "$@" <&0 &
+  pid=$!
+  while kill -0 "${pid}" 2>/dev/null; do
+    if [ $((SECONDS - started)) -ge 20 ]; then
+      kill "${pid}" 2>/dev/null
+      wait "${pid}" 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.1 2>/dev/null || sleep 1
+  done
+  wait "${pid}"
 }
 
 # True if this system has a keychain that the installer can use.
 keychain_exists() {
-  local problem
+  local problem default_keychain
   local status=0
   case "${PLATFORM}" in
     macos)
-      command -v security >/dev/null 2>&1
+      command -v security >/dev/null 2>&1 || return 1
+      # security prints the default keychain as a path in quotes. Without that
+      # keychain, every other security command opens a dialog and waits.
+      default_keychain="$(limited security default-keychain 2>/dev/null | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')" || return 1
+      [ -n "${default_keychain}" ] && [ -e "${default_keychain}" ]
       ;;
     windows)
       command -v powershell.exe >/dev/null 2>&1 && command -v iconv >/dev/null 2>&1 &&
@@ -863,7 +876,7 @@ run_windows_credential() {
   CMAI_KEYCHAIN_ACTION="$1" CMAI_KEYCHAIN_TARGET="${KEYCHAIN_ENTRY}" CMAI_KEYCHAIN_USER="${KEYCHAIN_ACCOUNT}" \
     CMAI_KEYCHAIN_SECRET="${2:-}" MSYS2_ENV_CONV_EXCL='CMAI_KEYCHAIN_SECRET' \
     MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
-    powershell.exe -NoProfile -NonInteractive -EncodedCommand "${script}"
+    limited powershell.exe -NoProfile -NonInteractive -EncodedCommand "${script}"
 }
 
 # Stores the secret $1 in the system keychain. The secret goes to the keychain
@@ -878,7 +891,7 @@ keychain_set() {
         *[!A-Za-z0-9._~+/=:@%-]*) return 1 ;;
       esac
       printf 'add-generic-password -U -s "%s" -a "%s" -l "%s" -w "%s"\n' \
-        "${KEYCHAIN_ENTRY}" "${KEYCHAIN_ACCOUNT}" "${KEYCHAIN_LABEL}" "$1" | security -i >/dev/null
+        "${KEYCHAIN_ENTRY}" "${KEYCHAIN_ACCOUNT}" "${KEYCHAIN_LABEL}" "$1" | limited security -i >/dev/null
       ;;
     windows)
       run_windows_credential write "$1" >/dev/null
@@ -894,7 +907,7 @@ keychain_set() {
 keychain_get() {
   case "${PLATFORM}" in
     macos)
-      security find-generic-password -s "${KEYCHAIN_ENTRY}" -a "${KEYCHAIN_ACCOUNT}" -w 2>/dev/null
+      limited security find-generic-password -s "${KEYCHAIN_ENTRY}" -a "${KEYCHAIN_ACCOUNT}" -w 2>/dev/null
       ;;
     windows)
       run_windows_credential read 2>/dev/null | tr -d '\r'
@@ -908,7 +921,7 @@ keychain_get() {
 keychain_delete() {
   case "${PLATFORM}" in
     macos)
-      security delete-generic-password -s "${KEYCHAIN_ENTRY}" -a "${KEYCHAIN_ACCOUNT}" >/dev/null 2>&1
+      limited security delete-generic-password -s "${KEYCHAIN_ENTRY}" -a "${KEYCHAIN_ACCOUNT}" >/dev/null 2>&1
       ;;
     windows)
       run_windows_credential delete >/dev/null 2>&1

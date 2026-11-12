@@ -13,8 +13,10 @@
 # - Linux: the tests start a private D-Bus session with a temporary keyring and
 #   never reach your keyring. This needs secret-tool, dbus-run-session and
 #   gnome-keyring-daemon. Without these tools, the tests check the key file.
-# - macOS and Windows: the tests add one entry with a test name to your
-#   keychain and remove it at the end.
+# - macOS: the tests make a temporary keychain in the temporary home directory
+#   and never reach your keychains.
+# - Windows: the tests add one entry with a test name to the Credential Manager
+#   and remove it at the end.
 # Set GCAI_EXPECT_KEYCHAIN=1 to fail if no keychain is available, as the
 # continuous integration does.
 
@@ -89,6 +91,7 @@ source "${INSTALLER}"
 setup_colors
 detect_platform
 
+TEST_KEYCHAIN=''
 LOG="${SANDBOX}/install.log"
 TEMPLATE_HOOK="${HOME}/.git-templates/hooks/prepare-commit-msg"
 KEY_FILE="${HOME}/.config/git-commit-ai/config"
@@ -96,9 +99,34 @@ passed=0
 
 cleanup_tests() {
   keychain_delete >/dev/null 2>&1 || true
+  if [ -n "${TEST_KEYCHAIN}" ]; then
+    security delete-keychain "${TEST_KEYCHAIN}" >/dev/null 2>&1 || true
+  fi
   rm -rf "${SANDBOX}"
 }
 trap cleanup_tests EXIT
+
+# macOS finds its keychains through HOME. The tests make a keychain of their
+# own there, as the default keychain of the temporary home directory.
+if [ "${PLATFORM}" = macos ]; then
+  # Guard: if security showed a keychain outside the sandbox here, the next
+  # commands would change the settings of your real keychains.
+  case "$(security default-keychain 2>&1 || true)" in
+    *"${SANDBOX}"*|*"could not be found"*|'')
+      TEST_KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
+      mkdir -p "${HOME}/Library/Keychains" "${HOME}/Library/Preferences"
+      security create-keychain -p test-password "${TEST_KEYCHAIN}"
+      security set-keychain-settings "${TEST_KEYCHAIN}"
+      security unlock-keychain -p test-password "${TEST_KEYCHAIN}"
+      security list-keychains -d user -s "${TEST_KEYCHAIN}"
+      security default-keychain -d user -s "${TEST_KEYCHAIN}"
+      ;;
+    *)
+      echo "security does not use the temporary home directory. The tests leave the keychain alone."
+      keychain_exists() { return 1; }
+      ;;
+  esac
+fi
 
 pass() {
   passed=$((passed + 1))
@@ -205,8 +233,10 @@ cmai_script_findings "${SANDBOX}/tampered.sh" > "${SANDBOX}/findings"
 check "content check reports an unknown host" contains "${SANDBOX}/findings" "names the unknown host evil.example"
 check "content check reports a pipe into a shell" contains "${SANDBOX}/findings" "pipes data into a shell"
 
-head -c 20000 "${INSTALLER}" | "${BASH}" -s -- --non-interactive > "${LOG}" 2>&1 < /dev/null || true
-check "a partially downloaded installer changes nothing" test -z "$(ls -A "${HOME}")"
+head -c 20000 "${INSTALLER}" > "${SANDBOX}/partial-installer.sh"
+home_before="$(ls -A "${HOME}")"
+"${BASH}" -s -- --non-interactive < "${SANDBOX}/partial-installer.sh" > "${LOG}" 2>&1 || true
+check "a partially downloaded installer changes nothing" test "$(ls -A "${HOME}")" = "${home_before}"
 
 # ----------------------------------------------------------------------------
 # Fresh installation
