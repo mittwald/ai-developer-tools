@@ -27,18 +27,43 @@ See https://github.com/mrgoonie/cmai for more details.
 The installer shows each change before it applies the change:
 
 1. Installs the latest `cmai`, if `cmai` is missing or too old. The installer first checks the downloaded script for content that `cmai` has no need for, such as unknown hosts or encoded code, and asks before it installs a script with such content. This check is a heuristic, not a guarantee. The installer needs `sudo` only if it cannot write the link `/usr/local/bin/cmai` itself.
-2. Asks for your mittwald AI API key, or takes the key from `MITTWALD_AI_API_KEY`. The key is stored in `~/.config/git-commit-ai/config`, readable only by you.
+2. Asks for your mittwald AI API key, or takes the key from `MITTWALD_AI_API_KEY`, and stores the key (see [Where the API key is stored](#where-the-api-key-is-stored)).
 3. Configures `cmai` to use mittwald AI.
 4. Installs a `prepare-commit-msg` hook into your git template directory (default `~/.git-templates`).
 5. Optionally adds a snippet to your Vim config, so that `:q` aborts the commit.
 
-Requirements: Linux, `bash`, `git`, `curl` and `jq`.
+### Supported systems
+
+| System | Requirements |
+| --- | --- |
+| Linux | `bash`, `git`, `curl`, `jq` |
+| macOS | `git`, `curl` and the `bash` of macOS; `jq` for example from `brew install jq` |
+| Windows | [Git for Windows](https://git-scm.com/download/win); `jq` for example from `winget install jqlang.jq` |
+
+On Windows, run the installer in Git Bash. The hook then works for every commit, also from PowerShell or an IDE. The installer puts `cmai` into `~/bin`, which Git Bash has on its `PATH`.
+
+### Where the API key is stored
+
+The installer stores the API key in the keychain of your system, if both of these are true:
+
+- Your system has a keychain that the installer can use: the macOS Keychain, the Windows Credential Manager, or on Linux a keyring with the `secret-tool` command (GNOME Keyring, KWallet).
+- Your `cmai` can take the API key from the environment variable `CMAI_API_KEY`. The hook reads the key from the keychain and passes it to `cmai` this way, so that the key is never in a file.
+
+Otherwise the key is in `~/.config/git-commit-ai/config`, which only you can read. When you run the installer again and the two conditions are true, the installer moves the key from that file into the keychain.
+
+To run `cmai` yourself with a key from the keychain, pass the key in the same way, for example on Linux:
+
+```bash
+CMAI_API_KEY="$(secret-tool lookup service git-commit-ai account api-key)" cmai
+```
 
 ### Quick install
 
 ```bash
 curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh | bash
 ```
+
+On Windows, run this command in Git Bash.
 
 Make sure to run `git init` in your existing repository.
 

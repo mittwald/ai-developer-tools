@@ -1,0 +1,47 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            bash: bash
+          # /bin/bash is bash 3.2, the bash that macOS users have.
+          - name: macOS
+            os: macos-latest
+            bash: /bin/bash
+          # The default bash of a Windows runner is Git Bash.
+          - name: Windows
+            os: windows-latest
+            bash: bash
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install keyring tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libsecret-tools gnome-keyring dbus
+
+      - name: Run tests
+        env:
+          # Fail if the tests cannot use the system keychain.
+          GCAI_EXPECT_KEYCHAIN: "1"
+        run: ${{ matrix.bash }} tests/run.sh
