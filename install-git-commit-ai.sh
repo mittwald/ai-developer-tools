@@ -4,20 +4,32 @@
 # configures it and installs a prepare-commit-msg hook into the git template
 # directory.
 #
-# Everything runs from main() on the last line, so that a partially downloaded
-# script (curl | bash) does nothing.
+# Runs with bash 3.2 or later on Linux, macOS and Windows (Git Bash).
+#
+# Everything runs from main() at the end of the file, so that a partially
+# downloaded script (curl | bash) does nothing.
 
 set -euo pipefail
 
 # cmai is third-party code. The installer downloads the latest version, checks
 # the script for unexpected content (see cmai_script_findings) and installs the
 # script itself. No downloaded code runs during the installation.
-CMAI_REPO='https://github.com/mrgoonie/cmai.git'
+# CMAI_REPO, CMAI_BIN_DIR and CMAI_KEYCHAIN_ENTRY can be set in the
+# environment. The tests use them to stay inside a sandbox.
+CMAI_REPO="${CMAI_REPO:-https://github.com/mrgoonie/cmai.git}"
 CMAI_INSTALL_DIR="${HOME}/git-commit-ai"
-CMAI_LINK='/usr/local/bin/cmai'
 # Options that this installer and the hook need. Older cmai versions lack them.
 CMAI_REQUIRED_OPTIONS=(--message-only --print-config --use-custom --clear-model-options --max-output-tokens --extra-body)
 CMAI_CONFIG_DIR="${HOME}/.config/git-commit-ai"
+
+# The system keychain keeps the API key if a keychain exists and the installed
+# cmai takes the key from the environment variable CMAI_API_KEY. The hook finds
+# the name of the keychain entry in KEYCHAIN_FILE. Without a keychain, the key
+# stays in the key file of cmai, which only the user can read.
+KEYCHAIN_ENTRY="${CMAI_KEYCHAIN_ENTRY:-git-commit-ai}"
+KEYCHAIN_ACCOUNT='api-key'
+KEYCHAIN_LABEL='mittwald AI API key (git-commit-ai)'
+KEYCHAIN_FILE="${CMAI_CONFIG_DIR}/keychain"
 
 # Hosts that the cmai script names today. Another host is a finding.
 CMAI_KNOWN_HOSTS=' openrouter.ai localhost 127.0.0.1 github.com my-api.com '
@@ -44,8 +56,9 @@ AI_MODEL='Qwen3.8-27B-NVFP4'
 AI_MAX_OUTPUT_TOKENS=32768
 AI_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":false}}'
 
-# Text that every version of the hook written by this installer contains.
-HOOK_SIGNATURE='cmai --message-only'
+# Every hook written by this installer contains one of these two texts.
+HOOK_SIGNATURE='Installed by install-git-commit-ai.sh'
+HOOK_SIGNATURE_OLD='cmai --message-only'
 
 hook_content() {
   cat <<'HOOK_EOF'
@@ -57,6 +70,8 @@ hook_content() {
 #
 # The hook never blocks a commit. If the generation fails, the hook reports the
 # reason and git opens the editor without a generated message.
+#
+# Runs with bash 3.2 or later on Linux, macOS and Windows (Git for Windows).
 
 MSG_FILE="${1:-}"
 SOURCE="${2:-}"   # empty for a plain `git commit`; else message, template, merge, squash or commit
@@ -64,7 +79,13 @@ SOURCE="${2:-}"   # empty for a plain `git commit`; else message, template, merg
 MAX_ATTEMPTS=3
 TIMEOUT_SECONDS=30            # limit of the first attempt
 TIMEOUT_INCREASE_PERCENT=50   # growth of the limit after each timeout: 30s, 45s, 68s
-KILL_AFTER_SECONDS=2
+KILL_AFTER_SECONDS=2          # time for cmai to stop before the hook kills it
+KEYCHAIN_SECONDS=10           # limit for reading the API key from the system keychain
+
+# The installer writes the name of the keychain entry to this file when it
+# stores the API key in the system keychain.
+KEYCHAIN_FILE="${HOME}/.config/git-commit-ai/keychain"
+KEYCHAIN_ACCOUNT='api-key'
 
 case "${SOURCE}" in
   message|merge|squash|template|commit) exit 0 ;;
@@ -201,26 +222,6 @@ draw() {
   printf '\r%s\033[K' "${line}" >&2
 }
 
-# Redraws the status line until the hook stops this loop.
-animate() {
-  local frame=0
-  local text=''
-  local full=0
-  while :; do
-    if [ $((frame % MESSAGE_FRAMES)) -eq 0 ]; then
-      text="${MESSAGES[(message_start + frame / MESSAGE_FRAMES * 7) % ${#MESSAGES[@]}]}..."
-    fi
-    if [ -n "${TIMEOUT_BIN}" ]; then
-      full=$(( (SECONDS - started) * ${#text} / TIMEOUT_SECONDS ))
-    else
-      full=${#text}
-    fi
-    draw "${attempts}/${MAX_ATTEMPTS}" "${text}" "${frame}" "${full}"
-    frame=$((frame + 1))
-    sleep 0.1 2>/dev/null || sleep 1
-  done
-}
-
 # Replaces the status line with a final line. $1 = color, $2 = text.
 finish() {
   if [ "${LIVE}" -eq 1 ]; then
@@ -247,42 +248,116 @@ fail() {
   finish "${C_RED}" "No commit message generated: $1"
   if [ "${2:-}" = details ]; then
     cmai_output >&2
+    if [ -n "${keychain_error}" ]; then
+      printf '  %s\n' "${keychain_error}" >&2
+    fi
   fi
   exit 0
 }
 
-command -v cmai >/dev/null 2>&1 || fail "cmai not found in PATH"
+# Prints the PowerShell script that prints a generic credential from the
+# Windows Credential Manager. The name of the credential is in the environment
+# variable CMAI_KEYCHAIN_TARGET.
+windows_credential_script() {
+  cat <<'POWERSHELL_EOF'
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CmaiCredential {
+  [StructLayout(LayoutKind.Sequential)]
+  struct Credential {
+    public uint Flags; public uint Type; public IntPtr TargetName; public IntPtr Comment;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public uint BlobSize; public IntPtr Blob; public uint Persist; public uint AttributeCount;
+    public IntPtr Attributes; public IntPtr TargetAlias; public IntPtr UserName;
+  }
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CredReadW(string target, uint type, uint flags, out IntPtr credential);
+  [DllImport("advapi32.dll")]
+  static extern void CredFree(IntPtr credential);
+  public static string Read(string target) {
+    IntPtr pointer;
+    if (!CredReadW(target, 1, 0, out pointer)) { return null; }
+    try {
+      Credential credential = (Credential)Marshal.PtrToStructure(pointer, typeof(Credential));
+      return Marshal.PtrToStringUni(credential.Blob, (int)credential.BlobSize / 2);
+    } finally { CredFree(pointer); }
+  }
+}
+'@
+$secret = [CmaiCredential]::Read($env:CMAI_KEYCHAIN_TARGET)
+if ($null -eq $secret) { exit 1 }
+[Console]::Out.Write($secret)
+POWERSHELL_EOF
+}
 
-if command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_BIN=timeout
-elif command -v gtimeout >/dev/null 2>&1; then
-  TIMEOUT_BIN=gtimeout
-else
-  TIMEOUT_BIN=''
-fi
+# Prints the API key from the system keychain. $1 = name of the keychain entry.
+keychain_get() {
+  local script
+  case "${OSTYPE:-}" in
+    darwin*)
+      security find-generic-password -s "$1" -a "${KEYCHAIN_ACCOUNT}" -w
+      ;;
+    msys*|cygwin*)
+      # -EncodedCommand takes the script as base64 of UTF-16, which needs no quoting.
+      script="$(windows_credential_script | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\r\n')"
+      CMAI_KEYCHAIN_TARGET="$1" MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+        powershell.exe -NoProfile -NonInteractive -EncodedCommand "${script}"
+      ;;
+    *)
+      secret-tool lookup service "$1" account "${KEYCHAIN_ACCOUNT}"
+      ;;
+  esac
+}
+
+keychain_error=''
+
+# git starts hooks with its own PATH, which can lack the directory of cmai.
+CMAI="$(command -v cmai 2>/dev/null)" || CMAI="${HOME}/git-commit-ai/git-commit.sh"
+[ -x "${CMAI}" ] || fail "cmai not found"
 
 WORK_DIR="$(mktemp -d 2>/dev/null)" || fail "mktemp failed"
 OUT_FILE="${WORK_DIR}/out"
 ERR_FILE="${WORK_DIR}/err"
 child=''
-ticker=''
+
+tick() {
+  sleep 0.1 2>/dev/null || sleep 1
+}
+
+# Sends a signal to cmai and to the processes that cmai started. $1 = signal.
+signal_cmai() {
+  kill "-$1" -- "-${child}" 2>/dev/null || kill "-$1" "${child}" 2>/dev/null
+}
 
 # Runs from the EXIT trap.
 # shellcheck disable=SC2329
 cleanup() {
-  [ -n "${ticker}" ] && kill "${ticker}" 2>/dev/null
-  [ -n "${child}" ] && kill "${child}" 2>/dev/null
+  [ -n "${child}" ] && signal_cmai TERM
   rm -f "${OUT_FILE}" "${ERR_FILE}"
   rmdir "${WORK_DIR}" 2>/dev/null
 }
 trap cleanup EXIT
-# timeout runs cmai in its own process group, so Ctrl-C does not reach cmai.
-# The hook exits instead, and cleanup stops cmai.
+# cmai runs in its own process group, so Ctrl-C does not reach cmai. The hook
+# exits instead, and cleanup stops cmai.
 trap '[ "${LIVE}" -eq 1 ] && printf "%s\n" "${C_RESET}" >&2; exit 130' INT
 trap 'exit 143' TERM HUP
 
 if [ "${COLOR}" -eq 1 ]; then
   build_gradient
+fi
+
+# The key goes to cmai in the environment and never touches the disk. A cmai
+# version that cannot take the key from the environment uses its own key file.
+api_key=''
+if [ -s "${KEYCHAIN_FILE}" ]; then
+  IFS= read -r keychain_entry < "${KEYCHAIN_FILE}"
+  IFS= read -r -t "${KEYCHAIN_SECONDS}" api_key < <(keychain_get "${keychain_entry}" 2>/dev/null)
+  api_key="${api_key%$'\r'}"
+  if [ -z "${api_key}" ]; then
+    keychain_error='The API key could not be read from the system keychain. Re-run the installer to store the key again.'
+  fi
 fi
 
 attempts=0
@@ -291,29 +366,45 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
   attempts=$((attempts + 1))
   message_start=$((RANDOM % ${#MESSAGES[@]}))
   started="${SECONDS}"
-  if [ -n "${TIMEOUT_BIN}" ]; then
-    "${TIMEOUT_BIN}" -k "${KILL_AFTER_SECONDS}" "${TIMEOUT_SECONDS}" \
-      cmai --message-only > "${OUT_FILE}" 2> "${ERR_FILE}" &
-  else
-    cmai --message-only > "${OUT_FILE}" 2> "${ERR_FILE}" &
-  fi
+  timed_out=0
+  frame=0
+  text=''
+  # With job control, cmai gets its own process group. The hook can then stop
+  # cmai together with the curl process that cmai started.
+  set -m
+  CMAI_API_KEY="${api_key}" "${CMAI}" --message-only > "${OUT_FILE}" 2> "${ERR_FILE}" < /dev/null &
   child=$!
-  if [ "${LIVE}" -eq 1 ]; then
-    animate &
-    ticker=$!
-  else
+  set +m
+  if [ "${LIVE}" -eq 0 ]; then
     printf '%s/%s %s...\n' "${attempts}" "${MAX_ATTEMPTS}" "${MESSAGES[message_start]}" >&2
   fi
-  wait "${child}"; exitcode=$?
-  child=''
-  if [ -n "${ticker}" ]; then
-    kill "${ticker}" 2>/dev/null
-    wait "${ticker}" 2>/dev/null
-    ticker=''
-  fi
 
-  # timeout exits with 124 after SIGTERM and with 137 after SIGKILL.
-  if [ "${exitcode}" -ne 124 ] && [ "${exitcode}" -ne 137 ]; then
+  while kill -0 "${child}" 2>/dev/null; do
+    elapsed=$((SECONDS - started))
+    if [ "${elapsed}" -ge "${TIMEOUT_SECONDS}" ]; then
+      timed_out=1
+      signal_cmai TERM
+      grace=$((KILL_AFTER_SECONDS * 10))
+      while [ "${grace}" -gt 0 ] && kill -0 "${child}" 2>/dev/null; do
+        tick
+        grace=$((grace - 1))
+      done
+      signal_cmai KILL
+      break
+    fi
+    if [ "${LIVE}" -eq 1 ]; then
+      if [ $((frame % MESSAGE_FRAMES)) -eq 0 ]; then
+        text="${MESSAGES[(message_start + frame / MESSAGE_FRAMES * 7) % ${#MESSAGES[@]}]}..."
+      fi
+      draw "${attempts}/${MAX_ATTEMPTS}" "${text}" "${frame}" "$((elapsed * ${#text} / TIMEOUT_SECONDS))"
+    fi
+    frame=$((frame + 1))
+    tick
+  done
+  wait "${child}" 2>/dev/null; exitcode=$?
+  child=''
+
+  if [ "${timed_out}" -eq 0 ]; then
     break
   fi
   if [ "${attempts}" -ge "${MAX_ATTEMPTS}" ]; then
@@ -324,7 +415,8 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
 done
 
 [ "${exitcode}" -eq 0 ] || fail "cmai failed (exit ${exitcode})" details
-COMMIT_MSG="$(cat "${OUT_FILE}")"
+# jq for Windows ends lines with a carriage return.
+COMMIT_MSG="$(tr -d '\r' < "${OUT_FILE}")"
 [ -n "${COMMIT_MSG}" ] || fail "cmai returned an empty message" details
 
 if { printf '%s\n' "${COMMIT_MSG}"; cat "${MSG_FILE}"; } > "${MSG_FILE}.tmp" &&
@@ -354,9 +446,13 @@ if filereadable(expand("$VIMRUNTIME/defaults.vim"))
   source $VIMRUNTIME/defaults.vim
 endif'
 
+PLATFORM=''            # linux, macos or windows
 non_interactive=0
 tmp_dir=''
-cmai_api_key=''
+cmai_path=''           # the cmai script in use
+downloaded_script=''
+cmai_api_key=''        # the key that the user gave in step 2
+keychain_api_key=''    # the key, if the system keychain keeps it
 template_dir=''
 hook_path=''
 
@@ -393,6 +489,11 @@ usage() {
   echo "                     The default keeps an existing hook from another source"
   echo "                     and does not install a cmai script with unexpected content."
   echo "  -h, --help         Show this help"
+  echo
+  echo "Environment:"
+  echo "  MITTWALD_AI_API_KEY  API key to store, instead of typing it"
+  echo "  CMAI_BIN_DIR         Directory on the PATH for the cmai command"
+  echo "                       (default: /usr/local/bin, on Windows ~/bin)"
   echo
   echo "Pass options through a pipe with: curl ... | bash -s -- --non-interactive"
 }
@@ -523,15 +624,27 @@ resolve_template_dir() {
   esac
 }
 
+# True for /dir and for C:/dir, the form in which git for Windows stores paths.
+is_absolute_path() {
+  case "$1" in
+    /*|[A-Za-z]:[/\\]*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 prompt_template_dir() {
   local initial="$1"
   local input=''
   local resolved=''
 
   while true; do
-    if is_interactive; then
+    if is_interactive && [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
       printf '  %sTemplate directory:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
       read -r -e -i "${initial}" input < /dev/tty || true
+    elif is_interactive; then
+      # bash 3.2 (macOS) cannot put the default into the input line.
+      printf '  %sTemplate directory [%s]:%s ' "${C_BOLD}${C_BLUE}" "${initial}" "${C_RESET}"
+      read -r input < /dev/tty || true
     else
       printf '  %sTemplate directory:%s %s\n' "${C_BOLD}${C_BLUE}" "${C_RESET}" "$(code "${initial}")"
       input="${initial}"
@@ -539,7 +652,7 @@ prompt_template_dir() {
 
     [ -z "${input}" ] && input="${initial}"
     resolved="$(resolve_template_dir "${input}")"
-    if [ "${resolved#/}" = "${resolved}" ]; then
+    if ! is_absolute_path "${resolved}"; then
       error "template directory must be an absolute path."
       if is_interactive; then
         continue
@@ -561,13 +674,31 @@ warn_template_dir_not_global() {
 # Old cmai versions take an unknown option as the API key and then run
 # `git add .`. The check therefore reads the cmai script and does not run it.
 cmai_is_current() {
-  local cmai_path option
-  hash -r
-  cmai_path="$(command -v cmai 2>/dev/null)" || return 1
+  local option
+  cmai_path="$(find_cmai)" || return 1
   [ -r "${cmai_path}" ] || return 1
   for option in "${CMAI_REQUIRED_OPTIONS[@]}"; do
     grep -qF -e "${option})" "${cmai_path}" || return 1
   done
+}
+
+# Prints the cmai script in use: the command on the PATH, or else the installed
+# copy. The hook looks for cmai in the same order.
+find_cmai() {
+  hash -r
+  if command -v cmai 2>/dev/null; then
+    return 0
+  fi
+  if [ -x "${CMAI_INSTALL_DIR}/git-commit.sh" ]; then
+    printf '%s\n' "${CMAI_INSTALL_DIR}/git-commit.sh"
+    return 0
+  fi
+  return 1
+}
+
+# True if a cmai script takes the API key from the environment. $1 = script.
+cmai_reads_key_from_environment() {
+  grep -qF -e 'CMAI_API_KEY' "$1"
 }
 
 # Prints one line for each thing in a downloaded cmai script that does not look
@@ -584,7 +715,7 @@ cmai_script_findings() {
     grep -qF -e "${option})" "${file}" || echo "lacks the option ${option}"
   done
   [ "$(wc -c < "${file}")" -le 200000 ] || echo "is larger than expected"
-  if LC_ALL=C grep -qE '.{1000}' "${file}"; then
+  if ! awk 'length($0) > 1000 { exit 1 }' "${file}"; then
     echo "has very long lines"
   fi
   line="$(LC_ALL=C grep -n -m 1 '[^[:print:][:space:]]' "${file}" | cut -d: -f1 || true)"
@@ -613,6 +744,179 @@ write_cmai_setting() {
     umask 077
     mkdir -p "${CMAI_CONFIG_DIR}" && printf '%s\n' "$2" > "${file}"
   ) && chmod 700 "${CMAI_CONFIG_DIR}" && chmod 600 "${file}"
+}
+
+keychain_title() {
+  case "${PLATFORM}" in
+    macos) printf 'macOS Keychain' ;;
+    windows) printf 'Windows Credential Manager' ;;
+    *) printf 'system keyring' ;;
+  esac
+}
+
+# Runs a command with a time limit where the timeout tool exists. A locked
+# keyring can wait for a password dialog that nobody sees.
+limited() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 20 "$@"
+  else
+    "$@"
+  fi
+}
+
+# True if this system has a keychain that the installer can use.
+keychain_exists() {
+  local problem
+  local status=0
+  case "${PLATFORM}" in
+    macos)
+      command -v security >/dev/null 2>&1
+      ;;
+    windows)
+      command -v powershell.exe >/dev/null 2>&1 && command -v iconv >/dev/null 2>&1 &&
+        command -v base64 >/dev/null 2>&1
+      ;;
+    *)
+      command -v secret-tool >/dev/null 2>&1 || return 1
+      # Without a Secret Service (server, SSH session), secret-tool reports an error.
+      problem="$(limited secret-tool lookup service "${KEYCHAIN_ENTRY}" account "${KEYCHAIN_ACCOUNT}" 2>&1 >/dev/null)" || status=$?
+      [ -z "${problem}" ] && [ "${status}" -le 1 ]
+      ;;
+  esac
+}
+
+# Prints the PowerShell script that writes, reads or deletes a generic
+# credential in the Windows Credential Manager. The action and its values are
+# in the environment variables CMAI_KEYCHAIN_ACTION, _TARGET, _USER and _SECRET.
+windows_credential_script() {
+  cat <<'POWERSHELL_EOF'
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class CmaiCredential {
+  [StructLayout(LayoutKind.Sequential)]
+  struct Credential {
+    public uint Flags; public uint Type; public IntPtr TargetName; public IntPtr Comment;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public uint BlobSize; public IntPtr Blob; public uint Persist; public uint AttributeCount;
+    public IntPtr Attributes; public IntPtr TargetAlias; public IntPtr UserName;
+  }
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CredReadW(string target, uint type, uint flags, out IntPtr credential);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CredWriteW(ref Credential credential, uint flags);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CredDeleteW(string target, uint type, uint flags);
+  [DllImport("advapi32.dll")]
+  static extern void CredFree(IntPtr credential);
+  public static string Read(string target) {
+    IntPtr pointer;
+    if (!CredReadW(target, 1, 0, out pointer)) { return null; }
+    try {
+      Credential credential = (Credential)Marshal.PtrToStructure(pointer, typeof(Credential));
+      return Marshal.PtrToStringUni(credential.Blob, (int)credential.BlobSize / 2);
+    } finally { CredFree(pointer); }
+  }
+  public static void Write(string target, string user, string secret) {
+    byte[] blob = Encoding.Unicode.GetBytes(secret);
+    Credential credential = new Credential();
+    credential.Type = 1;     // generic credential
+    credential.Persist = 2;  // kept for this user on this computer
+    credential.TargetName = Marshal.StringToCoTaskMemUni(target);
+    credential.UserName = Marshal.StringToCoTaskMemUni(user);
+    credential.BlobSize = (uint)blob.Length;
+    credential.Blob = Marshal.AllocCoTaskMem(blob.Length);
+    try {
+      Marshal.Copy(blob, 0, credential.Blob, blob.Length);
+      if (!CredWriteW(ref credential, 0)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+    } finally {
+      Marshal.FreeCoTaskMem(credential.TargetName);
+      Marshal.FreeCoTaskMem(credential.UserName);
+      Marshal.FreeCoTaskMem(credential.Blob);
+    }
+  }
+  public static void Delete(string target) { CredDeleteW(target, 1, 0); }
+}
+'@
+switch ($env:CMAI_KEYCHAIN_ACTION) {
+  'write' { [CmaiCredential]::Write($env:CMAI_KEYCHAIN_TARGET, $env:CMAI_KEYCHAIN_USER, $env:CMAI_KEYCHAIN_SECRET) }
+  'read' {
+    $secret = [CmaiCredential]::Read($env:CMAI_KEYCHAIN_TARGET)
+    if ($null -eq $secret) { exit 1 }
+    [Console]::Out.Write($secret)
+  }
+  'delete' { [CmaiCredential]::Delete($env:CMAI_KEYCHAIN_TARGET) }
+}
+POWERSHELL_EOF
+}
+
+# Runs the credential script. $1 = action, $2 = secret for the action write.
+run_windows_credential() {
+  local script
+  # -EncodedCommand takes the script as base64 of UTF-16, which needs no quoting.
+  script="$(windows_credential_script | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\r\n')" || return 1
+  # Git Bash rewrites arguments and variables that look like a path. The
+  # MSYS settings keep the script and a secret that starts with a slash as they are.
+  CMAI_KEYCHAIN_ACTION="$1" CMAI_KEYCHAIN_TARGET="${KEYCHAIN_ENTRY}" CMAI_KEYCHAIN_USER="${KEYCHAIN_ACCOUNT}" \
+    CMAI_KEYCHAIN_SECRET="${2:-}" MSYS2_ENV_CONV_EXCL='CMAI_KEYCHAIN_SECRET' \
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+    powershell.exe -NoProfile -NonInteractive -EncodedCommand "${script}"
+}
+
+# Stores the secret $1 in the system keychain. The secret goes to the keychain
+# tool on stdin or in the environment and never as a command argument, because
+# other local users can read the arguments of a running process.
+keychain_set() {
+  case "${PLATFORM}" in
+    macos)
+      # `security -i` reads its command from stdin. Its quoting is simple, so
+      # only a secret without quote, backslash and space goes this way.
+      case "$1" in
+        *[!A-Za-z0-9._~+/=:@%-]*) return 1 ;;
+      esac
+      printf 'add-generic-password -U -s "%s" -a "%s" -l "%s" -w "%s"\n' \
+        "${KEYCHAIN_ENTRY}" "${KEYCHAIN_ACCOUNT}" "${KEYCHAIN_LABEL}" "$1" | security -i >/dev/null
+      ;;
+    windows)
+      run_windows_credential write "$1" >/dev/null
+      ;;
+    *)
+      printf '%s' "$1" | limited secret-tool store --label="${KEYCHAIN_LABEL}" \
+        service "${KEYCHAIN_ENTRY}" account "${KEYCHAIN_ACCOUNT}"
+      ;;
+  esac
+}
+
+# Prints the secret from the system keychain.
+keychain_get() {
+  case "${PLATFORM}" in
+    macos)
+      security find-generic-password -s "${KEYCHAIN_ENTRY}" -a "${KEYCHAIN_ACCOUNT}" -w 2>/dev/null
+      ;;
+    windows)
+      run_windows_credential read 2>/dev/null | tr -d '\r'
+      ;;
+    *)
+      limited secret-tool lookup service "${KEYCHAIN_ENTRY}" account "${KEYCHAIN_ACCOUNT}" 2>/dev/null
+      ;;
+  esac
+}
+
+keychain_delete() {
+  case "${PLATFORM}" in
+    macos)
+      security delete-generic-password -s "${KEYCHAIN_ENTRY}" -a "${KEYCHAIN_ACCOUNT}" >/dev/null 2>&1
+      ;;
+    windows)
+      run_windows_credential delete >/dev/null 2>&1
+      ;;
+    *)
+      limited secret-tool clear service "${KEYCHAIN_ENTRY}" account "${KEYCHAIN_ACCOUNT}" 2>/dev/null
+      ;;
+  esac
 }
 
 # Prints the editor command that git starts for a commit message.
@@ -669,39 +973,129 @@ print_snippet() {
   done <<< "$1"
 }
 
+detect_platform() {
+  case "${OSTYPE:-}" in
+    linux*) PLATFORM=linux ;;
+    darwin*) PLATFORM=macos ;;
+    msys*|cygwin*) PLATFORM=windows ;;
+    *)
+      echo "${C_RED}This installer supports Linux, macOS and Windows (Git Bash). Aborting without changes.${C_RESET}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+platform_title() {
+  case "${PLATFORM}" in
+    macos) printf 'macOS' ;;
+    windows) printf 'Windows' ;;
+    *) printf 'Linux' ;;
+  esac
+}
+
 check_requirements() {
-  local tool
+  local tool hint
   local missing=()
 
-  if ! command -v uname >/dev/null 2>&1; then
-    echo "${C_RED}ERROR:${C_RESET} uname is required but was not found in PATH. Aborting." >&2
-    exit 1
-  fi
-  if [ "$(uname -s)" != "Linux" ]; then
-    echo "${C_RED}This installer only supports Linux. Aborting without changes.${C_RESET}" >&2
-    exit 1
-  fi
   # cmai needs curl and jq to call the API.
   for tool in git curl jq; do
     command -v "${tool}" >/dev/null 2>&1 || missing+=("${tool}")
   done
   if [ "${#missing[@]}" -gt 0 ]; then
+    case "${PLATFORM}" in
+      macos) hint="brew install ${missing[*]}" ;;
+      windows) hint="winget install jqlang.jq (then open a new Git Bash window)" ;;
+      *) hint="sudo apt install ${missing[*]}, or the package manager of your distribution" ;;
+    esac
     echo "${C_RED}ERROR:${C_RESET} required but not found in PATH: ${missing[*]}. Aborting without changes." >&2
+    echo "Install with, for example: ${hint}" >&2
     exit 1
   fi
 }
 
+# Downloads the latest cmai into a temporary directory and checks the script.
+# Sets downloaded_script. Fails if the user does not accept a script with
+# unexpected content.
+download_cmai() {
+  local src_dir findings finding commit
+
+  if ! command -v mktemp >/dev/null 2>&1; then
+    error "mktemp is required to install $(code "cmai")."
+    echo "  ${C_RED}Please install $(code "cmai")${C_RED} manually first. Aborting.${C_RESET}" >&2
+    exit 1
+  fi
+  tmp_dir="$(mktemp -d)"
+  src_dir="${tmp_dir}/cmai"
+  downloaded_script="${src_dir}/git-commit.sh"
+
+  action "$(code "git clone --depth 1 ${CMAI_REPO} ${src_dir}")"
+  if ! git clone --quiet --depth 1 --template= "${CMAI_REPO}" "${src_dir}" < /dev/null 2>&1 | dim_output ||
+    [ ! -f "${downloaded_script}" ]; then
+    die "failed to download $(code "cmai"). Please install it manually first and re-run this script. Aborting."
+  fi
+
+  commit="$(git -C "${src_dir}" log -1 --format='%h from %cd' --date=short 2>/dev/null || true)"
+  action "Checking $(code "git-commit.sh") (commit ${commit:-unknown}) for unexpected content"
+  findings="$(cmai_script_findings "${downloaded_script}")"
+  if [ -z "${findings}" ]; then
+    echo "    ${C_DIM}Nothing unexpected found.${C_RESET}"
+    return 0
+  fi
+  echo
+  warning "the downloaded $(code "cmai")${C_YELLOW} script does not look as expected. The script:"
+  while IFS= read -r finding; do
+    echo "    ${C_YELLOW}- ${finding}${C_RESET}"
+  done <<< "${findings}"
+  echo "  ${C_YELLOW}Review ${CMAI_REPO%.git} before you continue.${C_RESET}"
+  echo
+  ask "Install this script anyway?" n
+}
+
+remove_download() {
+  action "Removing $(code "${tmp_dir}")"
+  rm -rf "${tmp_dir}"
+  tmp_dir=''
+}
+
+# Installs the downloaded script with the layout of the cmai install script: a
+# copy in the home directory and the cmai command in a directory on the PATH.
+install_downloaded_cmai() {
+  local target="${CMAI_INSTALL_DIR}/git-commit.sh"
+
+  action "$(code "mkdir -p ${CMAI_INSTALL_DIR}")"
+  action "$(code "cp ${downloaded_script} ${target}")"
+  if ! mkdir -p "${CMAI_INSTALL_DIR}" || ! cp "${downloaded_script}" "${target}" || ! chmod +x "${target}"; then
+    die "failed to copy $(code "cmai") to $(code "${CMAI_INSTALL_DIR}"). Aborting."
+  fi
+  if ! link_cmai "${target}"; then
+    warning "could not put $(code "cmai")${C_YELLOW} on the PATH. The hook works without it."
+    echo "  ${C_YELLOW}To run cmai yourself, use${C_RESET} $(code "$(to_tilde_path "${target}")")${C_YELLOW}.${C_RESET}"
+  fi
+  remove_download
+
+  if ! cmai_is_current; then
+    error "failed to install $(code "cmai")."
+    if command -v cmai >/dev/null 2>&1; then
+      echo "  ${C_RED}$(command -v cmai) comes first on the PATH and is an older version.${C_RESET}" >&2
+    fi
+    echo "  ${C_RED}Please fix this and re-run this script. Aborting.${C_RESET}" >&2
+    exit 1
+  fi
+  echo "  ${C_GREEN}Done.${C_RESET}"
+}
+
 step_install_cmai() {
-  local title src_dir script target findings finding commit
+  local title
 
   if cmai_is_current; then
     heading 1 "Install $(code "cmai")"
     echo
     echo "  $(code "cmai") ${C_GREEN}is already installed.${C_RESET}"
+    update_cmai_for_keychain
     return 0
   fi
 
-  if command -v cmai >/dev/null 2>&1; then
+  if find_cmai >/dev/null 2>&1; then
     title="Update $(code "cmai") (the installed version lacks options that this setup needs)"
   else
     title="Install $(code "cmai")"
@@ -709,88 +1103,73 @@ step_install_cmai() {
   if ! prompt_step 1 "${title}"; then
     abort
   fi
-  if ! command -v mktemp >/dev/null 2>&1; then
-    error "mktemp is required to install $(code "cmai")."
-    echo "  ${C_RED}Please install $(code "cmai")${C_RED} manually first. Aborting.${C_RESET}" >&2
+  if ! download_cmai; then
+    echo "  ${C_RED}$(code "cmai")${C_RED} was not installed. Aborting.${C_RESET}"
     exit 1
   fi
-
-  tmp_dir="$(mktemp -d)"
-  src_dir="${tmp_dir}/cmai"
-  script="${src_dir}/git-commit.sh"
-  target="${CMAI_INSTALL_DIR}/git-commit.sh"
-
-  action "$(code "git clone --depth 1 ${CMAI_REPO} ${src_dir}")"
-  if ! git clone --quiet --depth 1 --template= "${CMAI_REPO}" "${src_dir}" < /dev/null 2>&1 | dim_output ||
-    [ ! -f "${script}" ]; then
-    die "failed to download $(code "cmai"). Please install it manually first and re-run this script. Aborting."
-  fi
-
-  commit="$(git -C "${src_dir}" log -1 --format='%h from %cd' --date=short 2>/dev/null || true)"
-  action "Checking $(code "git-commit.sh") (commit ${commit:-unknown}) for unexpected content"
-  findings="$(cmai_script_findings "${script}")"
-  if [ -z "${findings}" ]; then
-    echo "    ${C_DIM}Nothing unexpected found.${C_RESET}"
-  else
-    echo
-    warning "the downloaded $(code "cmai")${C_YELLOW} script does not look as expected. The script:"
-    while IFS= read -r finding; do
-      echo "    ${C_YELLOW}- ${finding}${C_RESET}"
-    done <<< "${findings}"
-    echo "  ${C_YELLOW}Review ${CMAI_REPO%.git} before you continue.${C_RESET}"
-    echo
-    if ! ask "Install this script anyway?" n; then
-      echo "  ${C_RED}$(code "cmai")${C_RED} was not installed. Aborting.${C_RESET}"
-      exit 1
-    fi
-  fi
-
-  # Same layout as the cmai install script: a copy in the home directory and a
-  # link on the PATH.
-  action "$(code "mkdir -p ${CMAI_INSTALL_DIR}")"
-  action "$(code "cp ${script} ${target}")"
-  if ! mkdir -p "${CMAI_INSTALL_DIR}" || ! cp "${script}" "${target}" || ! chmod +x "${target}"; then
-    die "failed to copy $(code "cmai") to $(code "${CMAI_INSTALL_DIR}"). Aborting."
-  fi
-  if ! link_cmai "${target}"; then
-    die "failed to link $(code "${CMAI_LINK}"). Link it by hand and re-run this script. Aborting."
-  fi
-
-  action "Removing $(code "${tmp_dir}")"
-  rm -rf "${tmp_dir}"
-  tmp_dir=''
-
-  if ! cmai_is_current; then
-    error "failed to install $(code "cmai")."
-    if command -v cmai >/dev/null 2>&1; then
-      echo "  ${C_RED}$(command -v cmai) comes first on the PATH and is an older version.${C_RESET}" >&2
-    else
-      echo "  ${C_RED}$(dirname "${CMAI_LINK}") is not on the PATH.${C_RESET}" >&2
-    fi
-    echo "  ${C_RED}Please fix this and re-run this script. Aborting.${C_RESET}" >&2
-    exit 1
-  fi
-
-  echo "  ${C_GREEN}Done.${C_RESET}"
+  install_downloaded_cmai
 }
 
-# Puts cmai on the PATH. $1 = installed script. Needs sudo only if the link is
-# missing or wrong and its directory is not writable.
+# The system keychain can keep the API key only if cmai takes the key from the
+# environment. If the installed cmai cannot do that, a newer one may.
+update_cmai_for_keychain() {
+  if cmai_reads_key_from_environment "${cmai_path}" || ! keychain_exists; then
+    return 0
+  fi
+  echo
+  echo "  The installed cmai cannot take the API key from the $(keychain_title)."
+  if ! ask "Look for a newer cmai?" y; then
+    return 0
+  fi
+  if ! download_cmai; then
+    echo "  ${C_YELLOW}Keeping the installed cmai.${C_RESET}"
+    remove_download
+  elif cmai_reads_key_from_environment "${downloaded_script}"; then
+    install_downloaded_cmai
+  else
+    echo "  ${C_YELLOW}The latest cmai cannot do this either. The API key stays in a file that only you can read.${C_RESET}"
+    remove_download
+  fi
+}
+
+# Prints the directory that gets the cmai command.
+cmai_bin_dir() {
+  if [ -n "${CMAI_BIN_DIR:-}" ]; then
+    printf '%s\n' "${CMAI_BIN_DIR}"
+  elif [ "${PLATFORM}" = windows ]; then
+    # Git Bash has ~/bin on its PATH.
+    printf '%s\n' "${HOME}/bin"
+  else
+    printf '%s\n' '/usr/local/bin'
+  fi
+}
+
+# Puts cmai on the PATH. $1 = installed script. Needs sudo only if the
+# directory is not writable.
 link_cmai() {
   local target="$1"
-  local link_dir
-  link_dir="$(dirname "${CMAI_LINK}")"
+  local bin_dir link
+  bin_dir="$(cmai_bin_dir)"
+  link="${bin_dir}/cmai"
 
-  if [ "$(readlink -f -- "${CMAI_LINK}" 2>/dev/null || true)" = "$(readlink -f -- "${target}")" ]; then
-    echo "    ${C_DIM}${CMAI_LINK} already points to ${target}.${C_RESET}"
-  elif [ -w "${link_dir}" ]; then
-    action "$(code "ln -sf ${target} ${CMAI_LINK}")"
-    ln -sf "${target}" "${CMAI_LINK}"
+  if [ "${link}" -ef "${target}" ]; then
+    echo "    ${C_DIM}${link} already points to ${target}.${C_RESET}"
+  elif [ "${PLATFORM}" = windows ]; then
+    # Git Bash needs special rights for a symbolic link, so the command is a copy.
+    action "$(code "cp ${target} ${link}")"
+    mkdir -p "${bin_dir}" && cp "${target}" "${link}"
+  elif mkdir -p "${bin_dir}" 2>/dev/null && [ -w "${bin_dir}" ]; then
+    action "$(code "ln -sf ${target} ${link}")"
+    ln -sf "${target}" "${link}"
   elif command -v sudo >/dev/null 2>&1; then
-    action "$(code "sudo ln -sf ${target} ${CMAI_LINK}")"
-    sudo ln -sf "${target}" "${CMAI_LINK}" < /dev/null
+    if [ ! -d "${bin_dir}" ]; then
+      action "$(code "sudo mkdir -p ${bin_dir}")"
+      sudo mkdir -p "${bin_dir}" < /dev/null || return 1
+    fi
+    action "$(code "sudo ln -sf ${target} ${link}")"
+    sudo ln -sf "${target}" "${link}" < /dev/null
   else
-    error "$(code "${link_dir}") is not writable and $(code "sudo") was not found."
+    error "$(code "${bin_dir}") is not writable and $(code "sudo") was not found."
     return 1
   fi
 }
@@ -800,7 +1179,7 @@ step_api_key() {
 
   heading 2 "Configure API key for $(code "cmai")"
   echo
-  if [ -s "${CMAI_CONFIG_DIR}/config" ]; then
+  if [ -s "${CMAI_CONFIG_DIR}/config" ] || [ -s "${KEYCHAIN_FILE}" ]; then
     echo "  ${C_GREEN}An API key is already stored.${C_RESET}"
     prompt='New API key (empty keeps the stored key, input is hidden)'
   fi
@@ -818,9 +1197,73 @@ step_api_key() {
   cmai_api_key="${cmai_api_key//[[:space:]]/}"
 }
 
+# Stores the API key from step 2. The key goes into the system keychain where
+# that is possible, and a key that is in the key file of cmai moves there too.
+# Otherwise the key is in the key file, which only the user can read.
+store_api_key() {
+  local key="${cmai_api_key}"
+  local key_file="${CMAI_CONFIG_DIR}/config"
+  local question
+  local can_use_keychain=0
+
+  question="Store the API key in the $(keychain_title)?"
+  if cmai_reads_key_from_environment "${cmai_path}" && keychain_exists; then
+    can_use_keychain=1
+    if [ -z "${key}" ] && [ -s "${key_file}" ]; then
+      key="$(cat "${key_file}")"
+      question="Move the stored API key into the $(keychain_title)?"
+    fi
+  elif [ -z "${key}" ] && [ -s "${KEYCHAIN_FILE}" ]; then
+    # The key is in the keychain, but this cmai cannot take it from there.
+    key="$(keychain_get || true)"
+    cmai_api_key="${key}"
+  fi
+
+  if [ -z "${key}" ]; then
+    if [ -s "${KEYCHAIN_FILE}" ]; then
+      keychain_api_key="$(keychain_get || true)"
+      echo "  ${C_GREEN}Keeping the API key in the $(keychain_title).${C_RESET}"
+    elif [ -s "${key_file}" ]; then
+      echo "  ${C_GREEN}Keeping the stored API key.${C_RESET}"
+    else
+      echo "  ${C_YELLOW}No API key set. Re-run this installer to store a key later.${C_RESET}"
+    fi
+    return 0
+  fi
+
+  if [ "${can_use_keychain}" -eq 1 ] && ask "${question}" y; then
+    action "Storing API key in the $(keychain_title)"
+    if keychain_set "${key}" && [ "$(keychain_get || true)" = "${key}" ]; then
+      if ! write_cmai_setting keychain "${KEYCHAIN_ENTRY}"; then
+        die "failed to write $(code "${KEYCHAIN_FILE}"). Aborting."
+      fi
+      if [ -e "${key_file}" ]; then
+        action "Removing $(code "$(to_tilde_path "${key_file}")")"
+        rm -f "${key_file}"
+      fi
+      keychain_api_key="${key}"
+      return 0
+    fi
+    warning "could not store the API key in the $(keychain_title). The key goes into a file."
+  fi
+
+  if [ -n "${cmai_api_key}" ]; then
+    action "Writing API key to $(code "$(to_tilde_path "${key_file}")") (only you can read this file)"
+    if ! write_cmai_setting config "${key}"; then
+      die "failed to store the API key. Aborting."
+    fi
+  else
+    echo "  ${C_GREEN}Keeping the stored API key.${C_RESET}"
+  fi
+  if [ -e "${KEYCHAIN_FILE}" ]; then
+    keychain_delete || true
+    rm -f "${KEYCHAIN_FILE}"
+  fi
+}
+
 step_configure_cmai() {
   local preview_cmd
-  local cmai_cmd=(cmai --clear-model-options
+  local cmai_cmd=("${cmai_path}" --clear-model-options
                   --use-custom "${AI_BASE_URL}"
                   --model "${AI_MODEL}"
                   --temperature 0.7
@@ -834,18 +1277,7 @@ step_configure_cmai() {
     abort
   fi
 
-  if [ -n "${cmai_api_key}" ]; then
-    # The key goes into the cmai config file and not into a command argument,
-    # because other local users can read the arguments of a running process.
-    action "Writing API key to $(code "$(to_tilde_path "${CMAI_CONFIG_DIR}/config")") (mode 600)"
-    if ! write_cmai_setting config "${cmai_api_key}"; then
-      die "failed to store the API key. Aborting."
-    fi
-  elif [ -s "${CMAI_CONFIG_DIR}/config" ]; then
-    echo "  ${C_GREEN}Keeping the stored API key.${C_RESET}"
-  else
-    echo "  ${C_YELLOW}No API key set. Re-run this installer to store a key later.${C_RESET}"
-  fi
+  store_api_key
 
   preview_cmd="cmai --clear-model-options
          --use-custom \"${AI_BASE_URL}\"
@@ -857,7 +1289,8 @@ step_configure_cmai() {
          --extra-body '${AI_EXTRA_BODY}'
          --print-config"
   action "$(code "${preview_cmd}")"
-  if ! "${cmai_cmd[@]}" < /dev/null 2>&1 | dim_output; then
+  # With the key from the keychain in the environment, cmai reports the key as set.
+  if ! CMAI_API_KEY="${keychain_api_key}" "${cmai_cmd[@]}" < /dev/null 2>&1 | dim_output; then
     die "failed to configure $(code "cmai"). Aborting."
   fi
   # cmai exits on --print-config before persisting --max-output-tokens, so save it directly.
@@ -877,7 +1310,7 @@ step_template_dir() {
     resolved_existing_dir="$(resolve_template_dir "${existing_dir}")"
     printf '  %sTemplate directory:%s %s\n' "${C_BOLD}" "${C_RESET}" "$(code "${existing_dir}")"
     if ask "Use configured directory" y; then
-      if [ "${resolved_existing_dir#/}" = "${resolved_existing_dir}" ]; then
+      if ! is_absolute_path "${resolved_existing_dir}"; then
         error "configured template directory must be an absolute path."
         if ! prompt_template_dir "${HOME}/.git-templates"; then
           abort
@@ -902,8 +1335,9 @@ step_template_dir() {
     if ! mkdir -p "${template_dir}"; then
       die "failed to create $(code "${template_dir}"). Aborting."
     fi
-    action "$(code "git config --global init.templatedir '${template_dir}'")"
-    git config --global init.templatedir "${template_dir}"
+    # The form ~/dir is the same on every system, also for git on Windows.
+    action "$(code "git config --global init.templatedir '$(to_tilde_path "${template_dir}")'")"
+    git config --global init.templatedir "$(to_tilde_path "${template_dir}")"
   fi
 
   hooks_path="$(git config --global --get core.hooksPath || git config --system --get core.hooksPath || true)"
@@ -931,7 +1365,7 @@ step_install_hook() {
     chmod +x "${hook_path}"
     echo "  $(code "${hook_path}") ${C_GREEN}is already up to date.${C_RESET}"
     return 0
-  elif grep -qF -e "${HOOK_SIGNATURE}" "${hook_path}" 2>/dev/null; then
+  elif grep -qF -e "${HOOK_SIGNATURE}" -e "${HOOK_SIGNATURE_OLD}" "${hook_path}" 2>/dev/null; then
     if ! prompt_step 5 "Update $(code "${display_hook_path}")"; then
       abort
     fi
@@ -1043,10 +1477,11 @@ step_manual() {
 main() {
   setup_colors
   parse_args "$@"
+  detect_platform
   check_requirements
   trap cleanup EXIT
 
-  echo "${C_GREEN}Installer is running on Linux.${C_RESET}"
+  echo "${C_GREEN}Installer is running on $(platform_title).${C_RESET}"
   echo "${C_DIM}All changes will be shown before they are applied.${C_RESET}"
 
   step_install_cmai
@@ -1058,4 +1493,7 @@ main() {
   step_manual
 }
 
-main "$@"
+# Runs main, unless another script sources this file to use its functions.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+  main "$@"
+fi

@@ -25,7 +25,10 @@ Features that would (usually) not be added:
 
 ### Creating a pull request
 
-- Test your setup locally.
+- Test your setup locally. For the commit message installer, run
+  `bash tests/run.sh`. The tests use a temporary home directory and change
+  nothing in yours. A workflow runs the same tests on Linux, macOS and Windows
+  for every pull request.
 - Write docs and extend the readme.
 - Create a pull request. Explain your changes; ideally, you should link to an
   existing issue.
