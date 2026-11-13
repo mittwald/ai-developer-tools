@@ -165,7 +165,7 @@ fi
 if [ "${LIVE}" -eq 1 ] && [ -z "${NO_COLOR:-}" ]; then
   COLOR=1
   C_DIM=$'\033[2m'
-  C_FAINT=$'\033[0;2;38;2;128;128;128m'   # the slash of the attempt counter
+  C_FAINT=$'\033[0;2;38;2;80;80;80m'   # the slash of the attempt counter
   C_RED=$'\033[31m'
   C_RESET=$'\033[0m'
 else
