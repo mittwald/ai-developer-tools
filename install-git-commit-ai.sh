@@ -99,7 +99,7 @@ esac
 [ -n "${MSG_FILE}" ] || exit 0
 
 # Status texts with a remark, as "text|remark". While cmai runs, the line
-# shows "1/3 <text>...". When cmai is done, it becomes "<text>... <remark>".
+# shows "<text>...". When cmai is done, it becomes "<text>... <remark>".
 # ASCII only, no line longer than 72 (text and remark together).
 MESSAGES=(
   'Asking the diff what it did this time|It confessed.'
@@ -164,14 +164,10 @@ else
 fi
 if [ "${LIVE}" -eq 1 ] && [ -z "${NO_COLOR:-}" ]; then
   COLOR=1
-  C_DIM=$'\033[2m'
-  C_FAINT=$'\033[0;2;38;2;80;80;80m'   # the slash of the attempt counter
   C_RED=$'\033[31m'
   C_RESET=$'\033[0m'
 else
   COLOR=0
-  C_DIM=''
-  C_FAINT=''
   C_RED=''
   C_RESET=''
 fi
@@ -179,7 +175,6 @@ fi
 # Colors of the status text (24-bit): mittwald blue, purple, salmon and rose.
 # The colors flow through the letters. The part of the text that shows the
 # elapsed share of the time limit is bold and in full color, the rest is muted.
-# The attempt counter in front of the text stays dim, in the color of the theme.
 GRADIENT_STOPS=(75 56 232  155 110 216  231 160 134  182 117 133)
 GRADIENT_SIZE=60    # color steps of one cycle through all stops
 MUTED_GRAY=125      # the muted colors are a mix with this gray
@@ -209,20 +204,17 @@ build_gradient() {
   done
 }
 
-# Draws the status line. $1 = attempt counter such as 1/3 (empty for none),
-# $2 = text, $3 = frame number, $4 = number of text characters in full color.
+# Draws the status line. $1 = text, $2 = frame number, $3 = number of text
+# characters in full color.
 draw() {
-  local text="$2"
-  local length=${#2}
+  local text="$1"
+  local length=${#1}
   local line=''
   local i step
   if [ "${COLOR}" -eq 1 ]; then
-    if [ -n "$1" ]; then
-      line="${C_DIM}${1%%/*}${C_FAINT}/${C_DIM}${1#*/} "
-    fi
     for ((i = 0; i < length; i++)); do
-      step=$(( (i * GRADIENT_SIZE / length + GRADIENT_SIZE - $3 * 2 % GRADIENT_SIZE) % GRADIENT_SIZE ))
-      if [ "${i}" -lt "$4" ]; then
+      step=$(( (i * GRADIENT_SIZE / length + GRADIENT_SIZE - $2 * 2 % GRADIENT_SIZE) % GRADIENT_SIZE ))
+      if [ "${i}" -lt "$3" ]; then
         line+="${BRIGHT[step]}${text:i:1}"
       else
         line+="${MUTED[step]}${text:i:1}"
@@ -230,7 +222,7 @@ draw() {
     done
     line+="${C_RESET}"
   else
-    line="${1:+$1 }${text}"
+    line="${text}"
   fi
   printf '\r%s\033[K' "${line}" >&2
 }
@@ -241,7 +233,7 @@ finish_done() {
   local text="${MESSAGES[$1]%%|*}..."
   local remark="${MESSAGES[$1]#*|}"
   if [ "${LIVE}" -eq 1 ]; then
-    draw '' "${text}" "$2" "${#text}"
+    draw "${text}" "$2" "${#text}"
     printf ' %s\n' "${remark}" >&2
   else
     printf '%s %s\n' "${text}" "${remark}" >&2
@@ -403,7 +395,7 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
   child=$!
   set +m
   if [ "${LIVE}" -eq 0 ]; then
-    printf '%s/%s %s...\n' "${attempts}" "${MAX_ATTEMPTS}" "${MESSAGES[message_start]%%|*}" >&2
+    printf '%s...\n' "${MESSAGES[message_start]%%|*}" >&2
   fi
 
   while kill -0 "${child}" 2>/dev/null; do
@@ -426,7 +418,7 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
         message_index=$(( (message_start + frame / MESSAGE_FRAMES * 7) % ${#MESSAGES[@]} ))
         text="${MESSAGES[message_index]%%|*}..."
       fi
-      draw "${attempts}/${MAX_ATTEMPTS}" "${text}" "${frame}" "$((elapsed * ${#text} / TIMEOUT_SECONDS))"
+      draw "${text}" "${frame}" "$((elapsed * ${#text} / TIMEOUT_SECONDS))"
     fi
     frame=$((frame + 1))
     tick
