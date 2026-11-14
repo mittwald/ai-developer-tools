@@ -68,11 +68,14 @@ On Windows, run this command in Git Bash.
 
 Make sure to run `git init` in your existing repository.
 
-To read the script before you run it, download the script first:
+The hook is in its own file, [`prepare-commit-msg.sh`](prepare-commit-msg.sh). When you pipe the installer into `bash`, the installer downloads the hook from the `main` branch. When the hook is next to the installer, the installer uses that file.
+
+To read the scripts before you run them, download both first:
 
 ```bash
 curl -fsSLO https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh
-less install-git-commit-ai.sh
+curl -fsSLO https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/prepare-commit-msg.sh
+less install-git-commit-ai.sh prepare-commit-msg.sh
 bash install-git-commit-ai.sh
 ```
 
