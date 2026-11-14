@@ -68,11 +68,14 @@ On Windows, run this command in Git Bash.
 
 Make sure to run `git init` in your existing repository.
 
-To read the script before you run it, download the script first:
+The hook is in its own file, [`prepare-commit-msg.sh`](prepare-commit-msg.sh). When you pipe the installer into `bash`, the installer downloads the hook from the `main` branch. When the hook is next to the installer, the installer uses that file.
+
+To read the scripts before you run them, download both first:
 
 ```bash
 curl -fsSLO https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh
-less install-git-commit-ai.sh
+curl -fsSLO https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/prepare-commit-msg.sh
+less install-git-commit-ai.sh prepare-commit-msg.sh
 bash install-git-commit-ai.sh
 ```
 
@@ -117,7 +120,7 @@ cp ~/.git-templates/hooks/prepare-commit-msg "$(git rev-parse --git-path hooks)/
 
 - The hook sends the diff of your staged changes to mittwald AI. Do not stage secrets.
 - The hook never blocks a commit. It tries up to 3 times, with time limits of 30, 45 and 68 seconds. If the generation fails, the hook prints the reason and your editor opens without a generated message.
-- While you wait, the hook shows a status line such as `1/3 Reading between the hunks...`. The bold, fully colored part of the line grows with the elapsed share of the time limit. When the message is ready, the line becomes `Reading between the hunks... Read it all.`. Set `NO_COLOR=1` for plain text.
+- While you wait, the hook shows a status line such as `Reading between the hunks...`. The bold, fully colored part of the line grows with the elapsed share of the time limit. When the message is ready, the line becomes `Reading between the hunks... Read it all.`. Set `NO_COLOR=1` for plain text.
 - Press `Ctrl-C` to stop the generation and the commit.
 
 ## More tools coming soon
