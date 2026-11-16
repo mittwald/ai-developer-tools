@@ -70,14 +70,6 @@ export HOME="${SANDBOX}/home"
 export CMAI_BIN_DIR="${SANDBOX}/bin"
 export CMAI_REPO="${SANDBOX}/cmai-repo"
 export CMAI_KEYCHAIN_ENTRY="git-commit-ai-test-$$"
-# The installer reads the hook from a pipe through this URL, not from GitHub.
-# curl for Windows needs a Windows path in the URL.
-if command -v cygpath >/dev/null 2>&1; then
-  CMAI_HOOK_URL="file:///$(cygpath -m "${ROOT}")/prepare-commit-msg.sh"
-else
-  CMAI_HOOK_URL="file://${ROOT}/prepare-commit-msg.sh"
-fi
-export CMAI_HOOK_URL
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_EDITOR=true
 mkdir -p "${HOME}" "${CMAI_BIN_DIR}"
@@ -98,7 +90,6 @@ export PATH
 source "${INSTALLER}"
 setup_colors
 detect_platform
-load_hook || { echo "could not load the hook" >&2; exit 1; }
 
 TEST_KEYCHAIN=''
 LOG="${SANDBOX}/install.log"
@@ -237,24 +228,38 @@ status_texts() {
   sed -n "/^MESSAGES=(/,/^)/s/^  '\\(.*\\)'\$/\\1/p" "${HOOK_FILE}"
 }
 
-test_rejects_truncated_hook() {
-  ! valid_hook "$(head -n 50 "${HOOK_FILE}")"
-}
-
 # ----------------------------------------------------------------------------
 # Scripts
 # ----------------------------------------------------------------------------
-HOOK_FILE="${ROOT}/${HOOK_FILE_NAME}"
+HOOK_FILE="${SANDBOX}/hook"
+hook_content > "${HOOK_FILE}"
 check "installer has valid syntax" "${BASH}" -n "${INSTALLER}"
 check "hook has valid syntax" "${BASH}" -n "${HOOK_FILE}"
-check "installer takes the hook from its directory" test "$(hook_content)" = "$(cat "${HOOK_FILE}")"
-check "installer rejects a truncated hook" test_rejects_truncated_hook
 if command -v shellcheck >/dev/null 2>&1; then
   check "shellcheck finds nothing" shellcheck -x "${INSTALLER}" "${HOOK_FILE}" "${ROOT}/tests/run.sh" "${FIXTURE}"
 fi
 check "hook has 100 status texts" test "$(status_texts | wc -l | tr -d ' ')" = 100
 check "status texts are unique" test -z "$(status_texts | cut -d '|' -f 1 | sort | uniq -d)"
 check "status lines are ASCII and at most 72 characters" test -z "$(status_texts | LC_ALL=C awk -F '|' 'length($1) + 4 + length($2) > 72 || /[^ -~]/')"
+
+# with_progress, as on a terminal: the progress goes to a file instead.
+PROGRESS_LOG="${SANDBOX}/progress.log"
+progress_keeps_output() {
+  test "$(PROGRESS_TTY="${PROGRESS_LOG}" with_progress line 'Testing' 'ok' 'failed' sh -c 'sleep 0.5; echo out')" = out
+}
+progress_keeps_status() {
+  local status=0
+  PROGRESS_TTY="${PROGRESS_LOG}" with_progress quote 'Failing' 'ok' 'failed' sh -c 'sleep 0.5; exit 3' || status=$?
+  test "${status}" -eq 3
+}
+progress_keeps_stdin() {
+  test "$(echo in | PROGRESS_TTY="${PROGRESS_LOG}" with_progress line 'Reading' 'ok' 'failed' cat)" = in
+}
+check "progress keeps the output of the command" progress_keeps_output
+check "progress reports the work and its result" contains "${PROGRESS_LOG}" "Testing... ok"
+check "progress keeps the exit status of the command" progress_keeps_status
+check "progress reports a failure" contains "${PROGRESS_LOG}" "Failing... failed"
+check "progress keeps the stdin of the command" progress_keeps_stdin
 
 check "content check accepts the stand-in for cmai" test -z "$(cmai_script_findings "${FIXTURE}")"
 cp "${FIXTURE}" "${SANDBOX}/tampered.sh"

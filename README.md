@@ -68,14 +68,11 @@ On Windows, run this command in Git Bash.
 
 Make sure to run `git init` in your existing repository.
 
-The hook is in its own file, [`prepare-commit-msg.sh`](prepare-commit-msg.sh). When you pipe the installer into `bash`, the installer downloads the hook from the `main` branch. When the hook is next to the installer, the installer uses that file.
-
-To read the scripts before you run them, download both first:
+To read the script before you run it, download the script first:
 
 ```bash
 curl -fsSLO https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh
-curl -fsSLO https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/prepare-commit-msg.sh
-less install-git-commit-ai.sh prepare-commit-msg.sh
+less install-git-commit-ai.sh
 bash install-git-commit-ai.sh
 ```
 
@@ -83,6 +80,12 @@ To install or update without prompts, for example from a script, pass `--non-int
 
 ```bash
 curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh | bash -s -- --non-interactive
+```
+
+Without prompts, the installer takes the API key from `MITTWALD_AI_API_KEY`. Do not write the key into the command line, because your shell history keeps it. Read it without echo instead:
+
+```bash
+read -rs MITTWALD_AI_API_KEY && export MITTWALD_AI_API_KEY
 ```
 
 ### Update the hook in your repositories
