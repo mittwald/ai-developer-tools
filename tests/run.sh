@@ -223,15 +223,45 @@ else
   fi
 fi
 
+# Prints the status texts of the hook, one "text|remark" per line.
+status_texts() {
+  sed -n "/^MESSAGES=(/,/^)/s/^  '\\(.*\\)'\$/\\1/p" "${HOOK_FILE}"
+}
+
 # ----------------------------------------------------------------------------
 # Scripts
 # ----------------------------------------------------------------------------
-hook_content > "${SANDBOX}/hook"
+HOOK_FILE="${SANDBOX}/hook"
+hook_content > "${HOOK_FILE}"
 check "installer has valid syntax" "${BASH}" -n "${INSTALLER}"
-check "hook has valid syntax" "${BASH}" -n "${SANDBOX}/hook"
+check "hook has valid syntax" "${BASH}" -n "${HOOK_FILE}"
 if command -v shellcheck >/dev/null 2>&1; then
-  check "shellcheck finds nothing" shellcheck -x "${INSTALLER}" "${SANDBOX}/hook" "${ROOT}/tests/run.sh" "${FIXTURE}"
+  check "shellcheck finds nothing" shellcheck -x "${INSTALLER}" "${HOOK_FILE}" "${ROOT}/tests/run.sh" "${FIXTURE}"
 fi
+check "hook has 100 status texts" test "$(status_texts | wc -l | tr -d ' ')" = 100
+check "status texts are unique" test -z "$(status_texts | cut -d '|' -f 1 | sort | uniq -d)"
+check "status lines are ASCII and at most 72 characters" test -z "$(status_texts | LC_ALL=C awk -F '|' 'length($1) + 4 + length($2) > 72 || /[^ -~]/')"
+
+# with_progress, as on a terminal: the progress goes to a file instead. The
+# progress shows at once, so that a slow machine cannot hide it.
+PROGRESS_LOG="${SANDBOX}/progress.log"
+PROGRESS_DELAY_FRAMES=0
+progress_keeps_output() {
+  test "$(PROGRESS_TTY="${PROGRESS_LOG}" with_progress line 'Testing' 'ok' 'failed' sh -c 'sleep 0.5; echo out')" = out
+}
+progress_keeps_status() {
+  local status=0
+  PROGRESS_TTY="${PROGRESS_LOG}" with_progress quote 'Failing' 'ok' 'failed' sh -c 'sleep 0.5; exit 3' || status=$?
+  test "${status}" -eq 3
+}
+progress_keeps_stdin() {
+  test "$(echo in | PROGRESS_TTY="${PROGRESS_LOG}" with_progress line 'Reading' 'ok' 'failed' cat)" = in
+}
+check "progress keeps the output of the command" progress_keeps_output
+check "progress reports the work and its result" contains "${PROGRESS_LOG}" "Testing... ok"
+check "progress keeps the exit status of the command" progress_keeps_status
+check "progress reports a failure" contains "${PROGRESS_LOG}" "Failing... failed"
+check "progress keeps the stdin of the command" progress_keeps_stdin
 
 check "content check accepts the stand-in for cmai" test -z "$(cmai_script_findings "${FIXTURE}")"
 cp "${FIXTURE}" "${SANDBOX}/tampered.sh"

@@ -66,6 +66,8 @@ AI_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":false}}'
 HOOK_SIGNATURE='Installed by install-git-commit-ai.sh'
 HOOK_SIGNATURE_OLD='cmai --message-only'
 
+# The prepare-commit-msg hook. On Linux and macOS the installer writes it to
+# HOOK_SOURCE; on Windows it writes a copy into each hooks directory.
 hook_content() {
   cat <<'HOOK_EOF'
 #!/usr/bin/env bash
@@ -99,7 +101,7 @@ esac
 [ -n "${MSG_FILE}" ] || exit 0
 
 # Status texts with a remark, as "text|remark". While cmai runs, the line
-# shows "1/3 <text>...". When cmai is done, it becomes "<text>... <remark>".
+# shows "<text>...". When cmai is done, it becomes "<text>... <remark>".
 # ASCII only, no line longer than 72 (text and remark together).
 MESSAGES=(
   'Asking the diff what it did this time|It confessed.'
@@ -152,6 +154,56 @@ MESSAGES=(
   'Reading between the hunks|Read it all.'
   'Editing the swear words out of the summary|Squeaky clean.'
   'Trusting that the tests passed|Fingers crossed!'
+  'Sorting your hunks by level of embarrassment|Sorted.'
+  'Asking the reviewers to look away|They looked away.'
+  'Converting caffeine into a commit message|Conversion complete.'
+  'Checking whether "refactor" is technically true|Technically true.'
+  'Replacing "did stuff" with actual words|Words found.'
+  'Measuring the blast radius of this diff|Contained.'
+  'Pretending the merge conflict never happened|What conflict?'
+  'Folding forty lines of changes into one|Neatly folded.'
+  'Interviewing the lines you deleted|They will be missed.'
+  'Giving your variable renames a backstory|Very moving.'
+  'Choosing between "add" and "introduce"|Tough call.'
+  'Looking for the bug you fixed by accident|Found that one too.'
+  'Writing the message your reviewers dream of|Dream delivered.'
+  'Weighing the commit against the ticket|Close enough.'
+  'Smoothing over the third attempt at this|First try, officially.'
+  'Calculating how "minor" this change is|Minor-ish.'
+  'Politely ignoring the whitespace changes|Ignored.'
+  'Turning your diff into a short story|The end.'
+  'Rehearsing the commit for the stand-up|Ready to present.'
+  'Asking the hunks to form a single line|They lined up.'
+  'Reading the diff twice, just to be sure|Sure now.'
+  'Choosing the right amount of enthusiasm|Measured.'
+  'Untangling what changed from what moved|Untangled.'
+  'Leaving out the part about Friday afternoon|Our secret.'
+  'Keeping the subject under 72 characters|With room to spare.'
+  'Checking the diff for hidden feelings|None found.'
+  'Compressing your intentions into plain English|Compressed.'
+  'Paraphrasing the stack trace you fixed|Paraphrased.'
+  'Giving the bug a proper send-off|Rest in peace, bug.'
+  'Making sure "chore" is not an understatement|It is fine.'
+  'Spinning up a few billion parameters|All spinning.'
+  'Summarizing the meeting that led to this|Short meeting.'
+  'Agreeing on a tense with the model|Imperative it is.'
+  'Asking the cloud for a quick favor|Favor granted.'
+  'Picking words your future self will understand|Future-proof.'
+  'Separating the signal from the semicolons|Signal found.'
+  'Writing a message that git log will remember|Memorable.'
+  'Trimming the adjectives from your diff|Trimmed.'
+  'Avoiding the word "obviously"|Obviously.'
+  'Asking the model to be brief, for once|Brief enough.'
+  'Describing your fix without blaming anyone|Diplomatic.'
+  'Quietly forgetting the debug prints|Gone. Hopefully.'
+  'Making the reviewers believe it was easy|Looks easy.'
+  'Tuning the subject line to the right pitch|In tune.'
+  'Checking the diff against common sense|It passed.'
+  'Bribing the tokenizer with spare bytes|Bribe accepted.'
+  'Finding the story hidden in your staged files|Once upon a commit.'
+  'Considering the word "tweak" very carefully|Rejected.'
+  'Asking the model to skip the small talk|Straight to it.'
+  'Packing your changes for the trip to main|Packed and ready.'
 )
 FRAMES_PER_SECOND=20
 MESSAGE_FRAMES=60   # frames until the next text, about 3 seconds
@@ -164,22 +216,19 @@ else
 fi
 if [ "${LIVE}" -eq 1 ] && [ -z "${NO_COLOR:-}" ]; then
   COLOR=1
-  C_DIM=$'\033[2m'
-  C_FAINT=$'\033[0;2;38;2;80;80;80m'   # the slash of the attempt counter
-  C_RED=$'\033[31m'
+  C_RED=$'\033[1;38;2;240;98;118m'      # red that fits the colors of mittwald
+  C_REMARK=$'\033[3;38;2;231;160;134m'  # mittwald salmon, italic
   C_RESET=$'\033[0m'
 else
   COLOR=0
-  C_DIM=''
-  C_FAINT=''
   C_RED=''
+  C_REMARK=''
   C_RESET=''
 fi
 
 # Colors of the status text (24-bit): mittwald blue, purple, salmon and rose.
 # The colors flow through the letters. The part of the text that shows the
 # elapsed share of the time limit is bold and in full color, the rest is muted.
-# The attempt counter in front of the text stays dim, in the color of the theme.
 GRADIENT_STOPS=(75 56 232  155 110 216  231 160 134  182 117 133)
 GRADIENT_SIZE=60    # color steps of one cycle through all stops
 MUTED_GRAY=125      # the muted colors are a mix with this gray
@@ -209,20 +258,17 @@ build_gradient() {
   done
 }
 
-# Draws the status line. $1 = attempt counter such as 1/3 (empty for none),
-# $2 = text, $3 = frame number, $4 = number of text characters in full color.
+# Draws the status line. $1 = text, $2 = frame number, $3 = number of text
+# characters in full color.
 draw() {
-  local text="$2"
-  local length=${#2}
+  local text="$1"
+  local length=${#1}
   local line=''
   local i step
   if [ "${COLOR}" -eq 1 ]; then
-    if [ -n "$1" ]; then
-      line="${C_DIM}${1%%/*}${C_FAINT}/${C_DIM}${1#*/} "
-    fi
     for ((i = 0; i < length; i++)); do
-      step=$(( (i * GRADIENT_SIZE / length + GRADIENT_SIZE - $3 * 2 % GRADIENT_SIZE) % GRADIENT_SIZE ))
-      if [ "${i}" -lt "$4" ]; then
+      step=$(( (i * GRADIENT_SIZE / length + GRADIENT_SIZE - $2 * 2 % GRADIENT_SIZE) % GRADIENT_SIZE ))
+      if [ "${i}" -lt "$3" ]; then
         line+="${BRIGHT[step]}${text:i:1}"
       else
         line+="${MUTED[step]}${text:i:1}"
@@ -230,7 +276,7 @@ draw() {
     done
     line+="${C_RESET}"
   else
-    line="${1:+$1 }${text}"
+    line="${text}"
   fi
   printf '\r%s\033[K' "${line}" >&2
 }
@@ -241,8 +287,8 @@ finish_done() {
   local text="${MESSAGES[$1]%%|*}..."
   local remark="${MESSAGES[$1]#*|}"
   if [ "${LIVE}" -eq 1 ]; then
-    draw '' "${text}" "$2" "${#text}"
-    printf ' %s\n' "${remark}" >&2
+    draw "${text}" "$2" "${#text}"
+    printf ' %s%s%s\n' "${C_REMARK}" "${remark}" "${C_RESET}" >&2
   else
     printf '%s %s\n' "${text}" "${remark}" >&2
   fi
@@ -403,7 +449,7 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
   child=$!
   set +m
   if [ "${LIVE}" -eq 0 ]; then
-    printf '%s/%s %s...\n' "${attempts}" "${MAX_ATTEMPTS}" "${MESSAGES[message_start]%%|*}" >&2
+    printf '%s...\n' "${MESSAGES[message_start]%%|*}" >&2
   fi
 
   while kill -0 "${child}" 2>/dev/null; do
@@ -426,7 +472,7 @@ while [ "${attempts}" -lt "${MAX_ATTEMPTS}" ]; do
         message_index=$(( (message_start + frame / MESSAGE_FRAMES * 7) % ${#MESSAGES[@]} ))
         text="${MESSAGES[message_index]%%|*}..."
       fi
-      draw "${attempts}/${MAX_ATTEMPTS}" "${text}" "${frame}" "$((elapsed * ${#text} / TIMEOUT_SECONDS))"
+      draw "${text}" "${frame}" "$((elapsed * ${#text} / TIMEOUT_SECONDS))"
     fi
     frame=$((frame + 1))
     tick
@@ -488,19 +534,40 @@ template_dir=''
 hook_path=''
 repo_dirs=()           # the directories of --repos
 
+# The colors of mittwald: blue, purple, salmon and rose. A terminal with 24-bit
+# color gets them exactly, a terminal with 256 colors gets the nearest ones.
+# Output to a file or a pipe stays plain text without symbols.
 setup_colors() {
+  FANCY=0
   if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    case "${COLORTERM:-}:${TERM_PROGRAM:-}:${WT_SESSION:+wt}" in
+      *truecolor*|*24bit*|*iTerm.app*|*WezTerm*|*ghostty*|*vscode*|*mintty*|*wt) COLOR_DEPTH=24 ;;
+      *)
+        case "${TERM:-}" in
+          *256color*|xterm-kitty|alacritty|foot*) COLOR_DEPTH=8 ;;
+          *) COLOR_DEPTH=4 ;;
+        esac
+        ;;
+    esac
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+      *UTF-8*|*utf-8*|*UTF8*|*utf8*) FANCY=1 ;;
+    esac
     C_RESET=$'\033[0m'
     C_BOLD=$'\033[1m'
     C_ITALIC=$'\033[3m'
-    C_DIM=$'\033[2m'
-    C_RED=$'\033[31m'
-    C_GREEN=$'\033[32m'
-    C_YELLOW=$'\033[33m'
-    C_BLUE=$'\033[34m'
-    C_CYAN=$'\033[36m'
-    C_CODE=$'\033[95m'
+    C_BLUE="$(color 124 112 255 105 34)"     # mittwald blue, lighter for dark terminals
+    C_CYAN="$(color 155 110 216 140 35)"     # mittwald purple
+    C_CODE="$(color 231 160 134 216 95)"     # mittwald salmon
+    C_ROSE="$(color 182 117 133 132 35)"     # mittwald rose
+    C_DIM="$(color 140 138 160 245 90)"
+    C_GREEN="$(color 94 204 150 78 32)"
+    C_YELLOW="$(color 240 190 100 221 33)"
+    C_RED="$(color 240 98 118 204 31)"
+    C_COLOR_NAME="$(color 196 178 240 183 35)"   # light purple
+    C_COLOR_VALUE="$(color 240 214 200 223 37)"  # light salmon
+    C_BADGE="$(color 255 255 255 231 97)$(background 75 56 232 56 44)${C_BOLD}"
   else
+    COLOR_DEPTH=0
     C_RESET=''
     C_BOLD=''
     C_ITALIC=''
@@ -511,7 +578,251 @@ setup_colors() {
     C_BLUE=''
     C_CYAN=''
     C_CODE=''
+    C_ROSE=''
+    C_COLOR_NAME=''
+    C_COLOR_VALUE=''
+    C_BADGE=''
   fi
+  # The progress of slow work goes straight to the terminal, so that it also
+  # shows while the output of a command is captured or piped.
+  PROGRESS_TTY=''
+  if [ "${FANCY}" -eq 1 ] && [ -t 2 ] && { : > /dev/tty; } 2>/dev/null; then
+    PROGRESS_TTY=/dev/tty
+  fi
+  if [ "${FANCY}" -eq 1 ]; then
+    BAR='▎'
+    M_OK='✔ '
+    M_NOTE='▲ '
+    M_ERROR='✖ '
+    M_ASK='◆ '
+  else
+    BAR='>'
+    M_OK=''
+    M_NOTE=''
+    M_ERROR=''
+    M_ASK=''
+  fi
+}
+
+# Prints the escape sequence of a text color. $1 $2 $3 = 24-bit color,
+# $4 = nearest of 256 colors, $5 = basic color.
+color() {
+  case "${COLOR_DEPTH}" in
+    24) printf '\033[38;2;%s;%s;%sm' "$1" "$2" "$3" ;;
+    8) printf '\033[38;5;%sm' "$4" ;;
+    *) printf '\033[%sm' "$5" ;;
+  esac
+}
+
+# Like color, for the background.
+background() {
+  case "${COLOR_DEPTH}" in
+    24) printf '\033[48;2;%s;%s;%sm' "$1" "$2" "$3" ;;
+    8) printf '\033[48;5;%sm' "$4" ;;
+    *) printf '\033[%sm' "$5" ;;
+  esac
+}
+
+# Keeps the style $2 for all of $1, also after a part of $1 that ends with
+# C_RESET, such as the output of code.
+styled() {
+  if [ -n "${C_RESET}" ]; then
+    printf '%s%s%s' "$2" "${1//"${C_RESET}"/${C_RESET}$2}" "${C_RESET}"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+# Prints $1 in bold with the colors of mittwald flowing through the letters.
+gradient_text() {
+  local text="$1"
+  local stops=(75 56 232  155 110 216  231 160 134  182 117 133)
+  local length=${#1}
+  local i segment from position ease channel value rgb line=''
+  if [ "${COLOR_DEPTH}" -ne 24 ]; then
+    styled "${text}" "${C_BOLD}${C_BLUE}"
+    return
+  fi
+  for ((i = 0; i < length; i++)); do
+    # Position in the gradient from the first to the last stop, 0 to 3000.
+    position=$(( i * 3000 / (length > 1 ? length - 1 : 1) ))
+    segment=$(( position / 1000 ))
+    [ "${segment}" -lt 3 ] || segment=2
+    from=$(( segment * 3 ))
+    ease=$(( position - segment * 1000 ))
+    rgb=''
+    for channel in 0 1 2; do
+      value=$(( stops[from + channel] + (stops[from + 3 + channel] - stops[from + channel]) * ease / 1000 ))
+      # Lighter, so that the dark blue stays readable on a dark terminal.
+      value=$(( value + (255 - value) * 25 / 100 ))
+      rgb+=";${value}"
+    done
+    line+=$'\033'"[1;38;2${rgb}m${text:i:1}"
+  done
+  printf '%s%s' "${line}" "${C_RESET}"
+}
+
+# Prints the title of the installer.
+banner() {
+  if [ "${FANCY}" -eq 1 ]; then
+    echo
+    echo "  ${C_BLUE}${BAR}${C_RESET} $(gradient_text 'mittwald AI — git commit messages')"
+    echo "  ${C_CYAN}${BAR}${C_RESET} ${C_DIM}Installer is running on $(platform_title).${C_RESET}"
+    echo "  ${C_ROSE}${BAR}${C_RESET} ${C_DIM}All changes will be shown before they are applied.${C_RESET}"
+  else
+    echo "${C_GREEN}Installer is running on $(platform_title).${C_RESET}"
+    echo "${C_DIM}All changes will be shown before they are applied.${C_RESET}"
+  fi
+}
+
+# Prints the end of the installation.
+outro() {
+  if [ "${FANCY}" -eq 1 ]; then
+    echo "  ${C_GREEN}${M_OK}${C_RESET}$(gradient_text 'All set. Happy committing!')"
+    echo
+  fi
+}
+
+# Progress of slow work, in the style of the status line of the hook: the
+# colors of mittwald flow through the text, and the bold part grows with the
+# elapsed share of PROGRESS_SECONDS.
+PROGRESS_SECONDS=20         # the time limit of `limited`
+PROGRESS_DELAY_FRAMES=6     # work that ends within 0.3 seconds shows nothing
+PROGRESS_STOPS=(75 56 232  155 110 216  231 160 134  182 117 133)
+PROGRESS_STEPS=60           # color steps of one cycle through all stops
+PROGRESS_BRIGHT=()
+PROGRESS_MUTED=()
+PROGRESS_PID=''
+
+# Fills PROGRESS_BRIGHT and PROGRESS_MUTED with one escape sequence per color
+# step. The muted colors are a mix with gray.
+build_progress_gradient() {
+  local stop_count=$(( ${#PROGRESS_STOPS[@]} / 3 ))
+  local step segment from to position ease channel value bright muted
+  for ((step = 0; step < PROGRESS_STEPS; step++)); do
+    segment=$(( step * stop_count / PROGRESS_STEPS ))
+    from=$(( segment * 3 ))
+    to=$(( (from + 3) % ${#PROGRESS_STOPS[@]} ))
+    position=$(( step * stop_count % PROGRESS_STEPS * 1000 / PROGRESS_STEPS ))
+    ease=$(( position * position * (3000 - 2 * position) / 1000000 ))
+    bright=''
+    muted=''
+    for channel in 0 1 2; do
+      value=$(( PROGRESS_STOPS[from + channel] + (PROGRESS_STOPS[to + channel] - PROGRESS_STOPS[from + channel]) * ease / 1000 ))
+      bright+=";$(( value + (255 - value) * 25 / 100 ))"
+      muted+=";$(( value + (125 - value) * 62 / 100 ))"
+    done
+    PROGRESS_BRIGHT[step]=$'\033'"[0;1;38;2${bright}m"
+    PROGRESS_MUTED[step]=$'\033'"[0;38;2${muted}m"
+  done
+}
+
+# Prints $1 with the colors flowing. $2 = frame number, $3 = number of
+# characters in bold and full color.
+progress_text() {
+  local text="$1"
+  local length=${#1}
+  local line='' i step
+  if [ "${COLOR_DEPTH}" -ne 24 ]; then
+    printf '%s%s%s%s%s' "${C_BOLD}${C_BLUE}" "${text:0:$3}" "${C_RESET}${C_DIM}" "${text:$3}" "${C_RESET}"
+    return
+  fi
+  [ "${#PROGRESS_BRIGHT[@]}" -gt 0 ] || build_progress_gradient
+  for ((i = 0; i < length; i++)); do
+    step=$(( (i * PROGRESS_STEPS / length + PROGRESS_STEPS - $2 * 2 % PROGRESS_STEPS) % PROGRESS_STEPS ))
+    if [ "${i}" -lt "$3" ]; then
+      line+="${PROGRESS_BRIGHT[step]}${text:i:1}"
+    else
+      line+="${PROGRESS_MUTED[step]}${text:i:1}"
+    fi
+  done
+  printf '%s%s' "${line}" "${C_RESET}"
+}
+
+# Runs a command and shows what it does while it runs. The output and the exit
+# status of the command stay as they are.
+# $1 = "quote" to show the progress inside the quote bar of the last action,
+#      or "line" for a line of its own
+# $2 = what the command does, such as "Downloading cmai"
+# $3 = remark when the command succeeds, $4 = remark when it fails. The remark
+#      "failed" is an error in red; any other remark is a plain answer, such as
+#      "not available", in gray.
+# The rest is the command.
+# Stops the command of with_progress and its processes after Ctrl-C.
+# Runs from the INT trap of with_progress.
+# shellcheck disable=SC2329
+progress_interrupted() {
+  kill -TERM -- "-${PROGRESS_PID}" 2>/dev/null || kill -TERM "${PROGRESS_PID}" 2>/dev/null || true
+  wait "${PROGRESS_PID}" 2>/dev/null || true
+  printf '\r\033[K\033[?25h' >&9
+  exit 130
+}
+
+with_progress() {
+  local place="$1" text="$2..." remark_ok="$3" remark_failed="$4"
+  local prefix='  ' frame=0 shown=0 status=0 started="${SECONDS}" elapsed bright
+  shift 4
+  if [ -z "${PROGRESS_TTY}" ]; then
+    "$@"
+    return
+  fi
+  [ "${place}" = quote ] && prefix="  ${C_CYAN}${BAR}${C_RESET} "
+
+  # With job control, the command runs in its own process group, so that
+  # Ctrl-C can stop it together with the processes that it started. A process
+  # group in the background must not read from the terminal, so a terminal on
+  # stdin is replaced with /dev/null.
+  set -m
+  if [ -t 0 ]; then
+    "$@" < /dev/null &
+  else
+    "$@" <&0 &
+  fi
+  PROGRESS_PID=$!
+  set +m
+  exec 9> "${PROGRESS_TTY}"
+  trap 'progress_interrupted' INT
+  while kill -0 "${PROGRESS_PID}" 2>/dev/null; do
+    if [ "${frame}" -ge "${PROGRESS_DELAY_FRAMES}" ]; then
+      [ "${shown}" -eq 1 ] || printf '\033[?25l' >&9
+      shown=1
+      elapsed=$((SECONDS - started))
+      bright=$(( elapsed >= PROGRESS_SECONDS ? ${#text} : elapsed * ${#text} / PROGRESS_SECONDS ))
+      printf '\r%s%s' "${prefix}" "$(progress_text "${text}" "${frame}" "${bright}")" >&9
+      printf '\033[K' >&9
+    fi
+    frame=$((frame + 1))
+    sleep 0.05 2>/dev/null || sleep 1
+  done
+  wait "${PROGRESS_PID}" || status=$?
+  trap - INT
+  PROGRESS_PID=''
+
+  if [ "${shown}" -eq 1 ]; then
+    elapsed=$((SECONDS - started))
+    printf '\r%s' "${prefix}" >&9
+    if [ "${status}" -eq 0 ]; then
+      printf '%s%s%s' "${C_GREEN}" "${M_OK}" "${C_RESET}" >&9
+    elif [ "${status}" -eq 124 ] || [ "${remark_failed}" = failed ]; then
+      printf '%s%s%s' "${C_RED}" "${M_ERROR}" "${C_RESET}" >&9
+    else
+      printf '%s○ %s' "${C_DIM}" "${C_RESET}" >&9
+    fi
+    printf '%s ' "$(progress_text "${text}" "${frame}" "${#text}")" >&9
+    if [ "${status}" -eq 0 ]; then
+      printf '%s%s%s' "${C_ITALIC}${C_CODE}" "${remark_ok}" "${C_RESET}" >&9
+    elif [ "${status}" -eq 124 ]; then
+      printf '%stimed out%s' "${C_ITALIC}${C_RED}" "${C_RESET}" >&9
+    elif [ "${remark_failed}" = failed ]; then
+      printf '%s%s%s' "${C_ITALIC}${C_RED}" "${remark_failed}" "${C_RESET}" >&9
+    else
+      printf '%s%s%s' "${C_ITALIC}${C_DIM}" "${remark_failed}" "${C_RESET}" >&9
+    fi
+    [ "${elapsed}" -lt 1 ] || printf '  %s%ss%s' "${C_DIM}" "${elapsed}" "${C_RESET}" >&9
+    printf '\033[K\n\033[?25h' >&9
+  fi
+  exec 9>&-
+  return "${status}"
 }
 
 usage() {
@@ -559,6 +870,9 @@ parse_args() {
 }
 
 cleanup() {
+  if [ -n "${PROGRESS_TTY:-}" ]; then
+    printf '\033[?25h' > "${PROGRESS_TTY}" 2>/dev/null || true
+  fi
   if [ -n "${tmp_dir}" ]; then
     rm -rf "${tmp_dir}"
   fi
@@ -572,25 +886,103 @@ code() {
   printf '%s%s%s' "${C_CODE}" "$1" "${C_RESET}"
 }
 
+# Shows the output of a command below its action, inside the quote bar.
 dim_output() {
-  sed "s/^/    ${C_DIM}/; s/\$/${C_RESET}/"
+  local line
+  while IFS= read -r line; do
+    if [ "${FANCY}" -eq 1 ]; then
+      printf '  %s%s%s %s%s%s\n' "${C_CYAN}" "${BAR}" "${C_RESET}" "${C_DIM}" "${line}" "${C_RESET}"
+    else
+      printf '    %s%s%s\n' "${C_DIM}" "${line}" "${C_RESET}"
+    fi
+  done
+}
+
+# Prints a detail line below an action, inside the quote bar. $1 = text with
+# its color.
+detail() {
+  if [ "${FANCY}" -eq 1 ]; then
+    printf '  %s%s%s %s%s\n' "${C_CYAN}" "${BAR}" "${C_RESET}" "$1" "${C_RESET}"
+  else
+    printf '    %s%s\n' "$1" "${C_RESET}"
+  fi
+}
+
+# Prints an empty line that continues the quote bar.
+quote_gap() {
+  if [ "${FANCY}" -eq 1 ]; then
+    echo "  ${C_CYAN}${BAR}${C_RESET}"
+  else
+    echo
+  fi
+}
+
+# Shows the output of `cmai --print-config` inside the quote bar: the title in
+# bold, then each setting with the names and the values in their own columns
+# and colors.
+config_output() {
+  local line name value width=0 i
+  local names=() values=()
+  local c_name c_value c_unset
+  c_name="${C_COLOR_NAME}"
+  c_value="${C_COLOR_VALUE}"
+  c_unset="${C_DIM}${C_ITALIC}"
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [ -n "${line}" ] || continue
+    case "${line}" in
+      *:) names+=("${line}"); values+=($'\001') ;;
+      *:*)
+        name="${line%%:*}"
+        value="${line#*:}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        names+=("${name}")
+        values+=("${value}")
+        [ "${#name}" -le "${width}" ] || width=${#name}
+        ;;
+      *) names+=("${line}"); values+=($'\002') ;;
+    esac
+  done
+  for ((i = 0; i < ${#names[@]}; i++)); do
+    case "${values[i]}" in
+      $'\001') detail "${C_BOLD}${names[i]}" ;;
+      $'\002') detail "${C_DIM}${names[i]}" ;;
+      'Not set') detail "$(printf "  %s%-$((width + 1))s%s  %s%s" "${c_name}" "${names[i]}:" "${C_RESET}" "${c_unset}" "${values[i]}")" ;;
+      *) detail "$(printf "  %s%-$((width + 1))s%s  %s%s" "${c_name}" "${names[i]}:" "${C_RESET}" "${c_value}" "${values[i]}")" ;;
+    esac
+  done
 }
 
 heading() {
-  printf '\n%sStep %s:%s %s\n' "${C_BOLD}${C_CYAN}" "$1" "${C_RESET}" "$2"
+  if [ "${FANCY}" -eq 1 ]; then
+    printf '\n  %s STEP %s/8 %s  %s\n' "${C_BADGE}" "$1" "${C_RESET}" "$(styled "$2" "${C_BOLD}")"
+  else
+    printf '\n%sStep %s:%s %s\n' "${C_BOLD}${C_CYAN}" "$1" "${C_RESET}" "$2"
+  fi
 }
 
-# Shows a command or an action before it runs.
+# Shows a command or an action before it runs. Actions in a row form one quote
+# with a bar on the left. Every line of $1 gets the bar; the style of a line
+# must end on that line, so that a command over several lines needs code for
+# each line.
 action() {
-  echo "  ${C_ITALIC}${C_BLUE}>${C_RESET}${C_ITALIC} $1${C_RESET}"
+  local line first=1
+  while IFS= read -r line; do
+    if [ "${first}" -eq 1 ] || [ "${FANCY}" -eq 1 ]; then
+      echo "  ${C_CYAN}${BAR}${C_RESET} $(styled "${line}" "${C_ITALIC}")"
+    else
+      echo "    $(styled "${line}" "${C_ITALIC}")"
+    fi
+    first=0
+  done <<< "$1"
 }
 
 warning() {
-  echo "  ${C_YELLOW}${C_BOLD}WARNING:${C_RESET}${C_YELLOW} $1${C_RESET}"
+  echo "  ${C_YELLOW}${M_NOTE}${C_BOLD}WARNING:${C_RESET}${C_YELLOW} $1${C_RESET}"
 }
 
 error() {
-  echo "  ${C_RED}ERROR:${C_RESET} $1" >&2
+  echo "  ${C_RED}${M_ERROR}${C_BOLD}ERROR:${C_RESET} $1" >&2
 }
 
 die() {
@@ -599,8 +991,50 @@ die() {
 }
 
 abort() {
-  echo "  ${C_RED}Aborting.${C_RESET}"
+  echo "  ${C_RED}${M_ERROR}Aborting.${C_RESET}"
   exit 1
+}
+
+# Prints the label of a prompt. $1 = question, $2 = hint such as "[Y/n]".
+prompt_label() {
+  if [ "${FANCY}" -eq 1 ]; then
+    prompt_text "$1" "$2"
+  elif [ -n "$2" ]; then
+    printf '  %s%s %s:%s ' "${C_BOLD}${C_BLUE}" "$1" "$2" "${C_RESET}"
+  else
+    printf '  %s%s:%s ' "${C_BOLD}${C_BLUE}" "$1" "${C_RESET}"
+  fi
+}
+
+prompt_text() {
+  printf '  %s%s%s%s' "${C_CODE}" "${M_ASK}" "${C_RESET}" "$(styled "$1" "${C_BOLD}")"
+  [ -z "$2" ] || printf ' %s%s%s' "${C_DIM}" "$2" "${C_RESET}"
+  printf ' %s›%s ' "${C_BLUE}${C_BOLD}" "${C_RESET}"
+}
+
+# Ends a prompt with the answer that counts, so that an empty answer or hidden
+# input still shows what was chosen. $1 = question, $2 = hint, $3 = answer with
+# its color. Plain output shows the answer only when nobody typed it.
+prompt_answer() {
+  if [ "${FANCY}" -eq 1 ] && is_interactive; then
+    # Back to the line of the prompt, which the input has ended.
+    printf '\033[1A\r\033[K'
+    prompt_text "$1" "$2"
+    printf '%s%s\n' "$3" "${C_RESET}"
+  elif [ "${FANCY}" -eq 1 ] || ! is_interactive; then
+    printf '%s%s\n' "$3" "${C_RESET}"
+  fi
+}
+
+# Prints the API key $1 hidden except for its last 4 characters.
+key_hint() {
+  local dots='...'
+  [ "${FANCY}" -eq 1 ] && dots='••••'
+  if [ "${#1}" -gt 8 ]; then
+    printf '%s%s' "${dots}" "${1:${#1}-4}"
+  else
+    printf '%s' "${dots}"
+  fi
 }
 
 # Asks a yes/no question. $1 = question, $2 = default answer (y or n).
@@ -612,38 +1046,49 @@ ask() {
   if [ "${default}" = y ]; then
     hint='[Y/n]'
   fi
-  printf '  %s%s %s:%s ' "${C_BOLD}${C_BLUE}" "${question}" "${hint}" "${C_RESET}"
+  prompt_label "${question}" "${hint}"
   if is_interactive; then
     read -r answer < /dev/tty || true
-  elif [ "${default}" = y ]; then
-    echo 'Y'
-  else
-    echo 'N'
   fi
   if [ -z "${answer}" ]; then
     answer="${default}"
   fi
   case "${answer}" in
-    y|Y|yes|Yes|YES) return 0 ;;
-    *) return 1 ;;
+    y|Y|yes|Yes|YES)
+      if [ "${FANCY}" -eq 1 ]; then prompt_answer "${question}" "${hint}" "${C_GREEN}Yes"; else prompt_answer "${question}" "${hint}" 'Y'; fi
+      return 0
+      ;;
+    *)
+      if [ "${FANCY}" -eq 1 ]; then prompt_answer "${question}" "${hint}" "${C_CODE}No"; else prompt_answer "${question}" "${hint}" 'N'; fi
+      return 1
+      ;;
   esac
 }
 
 prompt_step() {
   heading "$1" "$2"
   echo
-  ask "Run this step?" y
+  ask "Run this step?" y || return 1
+  echo
 }
 
 # Reads the API key without echo, so that the key does not stay on the screen
 # or in the terminal scrollback.
 prompt_api_key() {
-  printf '  %s%s:%s ' "${C_BOLD}${C_BLUE}" "$1" "${C_RESET}"
+  prompt_label "$1" ''
   cmai_api_key=''
   if is_interactive; then
     read -r -s cmai_api_key < /dev/tty || true
+    echo
   fi
-  echo
+  # A pasted key can carry spaces or a line end.
+  cmai_api_key="${cmai_api_key//[[:space:]]/}"
+  if [ -n "${cmai_api_key}" ]; then
+    prompt_answer "$1" '' "${C_CODE}$(key_hint "${cmai_api_key}")"
+    echo "  ${C_GREEN}${M_OK}Got the API key.${C_RESET}"
+  else
+    prompt_answer "$1" '' "${C_DIM}none"
+  fi
 }
 
 # The tilde in the next two functions is literal text, as git config stores it.
@@ -684,14 +1129,17 @@ prompt_template_dir() {
 
   while true; do
     if is_interactive && [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
-      printf '  %sTemplate directory:%s ' "${C_BOLD}${C_BLUE}" "${C_RESET}"
+      prompt_label 'Template directory' ''
       read -r -e -i "${initial}" input < /dev/tty || true
+      prompt_answer 'Template directory' '' "${C_CODE}${input:-${initial}}"
     elif is_interactive; then
       # bash 3.2 (macOS) cannot put the default into the input line.
-      printf '  %sTemplate directory [%s]:%s ' "${C_BOLD}${C_BLUE}" "${initial}" "${C_RESET}"
+      prompt_label 'Template directory' "[${initial}]"
       read -r input < /dev/tty || true
+      prompt_answer 'Template directory' "[${initial}]" "${C_CODE}${input:-${initial}}"
     else
-      printf '  %sTemplate directory:%s %s\n' "${C_BOLD}${C_BLUE}" "${C_RESET}" "$(code "${initial}")"
+      prompt_label 'Template directory' ''
+      printf '%s\n' "$(code "${initial}")"
       input="${initial}"
     fi
 
@@ -713,7 +1161,7 @@ prompt_template_dir() {
 warn_template_dir_not_global() {
   echo
   warning "template directory is not configured globally."
-  echo "  ${C_YELLOW}The template will not be found automatically.${C_RESET}"
+  echo "  ${C_YELLOW}${M_NOTE}The template will not be found automatically.${C_RESET}"
 }
 
 # Old cmai versions take an unknown option as the API key and then run
@@ -963,6 +1411,21 @@ keychain_get() {
   esac
 }
 
+# keychain_exists with progress.
+keychain_available() {
+  with_progress line "Looking for the $(keychain_title)" 'found' 'not available' keychain_exists
+}
+
+# keychain_get with progress.
+keychain_read() {
+  with_progress line "Reading the API key from the $(keychain_title)" 'done' 'no key found' keychain_get
+}
+
+# Stores the API key $1 and checks that the keychain returns it.
+keychain_store() {
+  keychain_set "$1" && [ "$(keychain_get || true)" = "$1" ]
+}
+
 keychain_delete() {
   case "${PLATFORM}" in
     macos)
@@ -1027,7 +1490,11 @@ editor_config_path() {
 print_snippet() {
   local line
   while IFS= read -r line; do
-    printf '  %s%s%s%s\n' "${C_ITALIC}" "${C_CODE}" "${line}" "${C_RESET}"
+    if [ "${FANCY}" -eq 1 ]; then
+      printf '  %s%s%s %s%s%s\n' "${C_ROSE}" "${BAR}" "${C_RESET}" "${C_CODE}" "${line}" "${C_RESET}"
+    else
+      printf '  %s%s%s%s\n' "${C_ITALIC}" "${C_CODE}" "${line}" "${C_RESET}"
+    fi
   done <<< "$1"
 }
 
@@ -1081,7 +1548,7 @@ fetch_cmai() {
 
   if ! command -v mktemp >/dev/null 2>&1; then
     error "mktemp is required to install $(code "cmai")."
-    echo "  ${C_RED}Please install $(code "cmai")${C_RED} manually first. Aborting.${C_RESET}" >&2
+    echo "  ${C_RED}${M_ERROR}Please install $(code "cmai")${C_RED} manually first. Aborting.${C_RESET}" >&2
     exit 1
   fi
   tmp_dir="$(mktemp -d)"
@@ -1089,7 +1556,8 @@ fetch_cmai() {
   downloaded_script="${src_dir}/git-commit.sh"
 
   action "$(code "git clone --depth 1 ${CMAI_REPO} ${src_dir}")"
-  if ! git clone --quiet --depth 1 --template= "${CMAI_REPO}" "${src_dir}" < /dev/null 2>&1 | dim_output ||
+  if ! with_progress quote "Downloading cmai" 'done' 'failed' \
+    git clone --quiet --depth 1 --template= "${CMAI_REPO}" "${src_dir}" < /dev/null 2>&1 | dim_output ||
     [ ! -f "${downloaded_script}" ]; then
     return 1
   fi
@@ -1104,15 +1572,15 @@ check_downloaded_cmai() {
   action "Checking $(code "git-commit.sh") (commit ${commit:-unknown}) for unexpected content"
   findings="$(cmai_script_findings "${downloaded_script}")"
   if [ -z "${findings}" ]; then
-    echo "    ${C_DIM}Nothing unexpected found.${C_RESET}"
+    detail "${C_DIM}Nothing unexpected found."
     return 0
   fi
   echo
   warning "the downloaded $(code "cmai")${C_YELLOW} script does not look as expected. The script:"
   while IFS= read -r finding; do
-    echo "    ${C_YELLOW}- ${finding}${C_RESET}"
+    detail "${C_YELLOW}- ${finding}"
   done <<< "${findings}"
-  echo "  ${C_YELLOW}Review ${CMAI_REPO%.git} before you continue.${C_RESET}"
+  echo "  ${C_YELLOW}${M_NOTE}Review ${CMAI_REPO%.git} before you continue.${C_RESET}"
   echo
   return 1
 }
@@ -1142,19 +1610,19 @@ install_downloaded_cmai() {
   fi
   if ! link_cmai "${target}"; then
     warning "could not put $(code "cmai")${C_YELLOW} on the PATH. The hook works without it."
-    echo "  ${C_YELLOW}To run cmai yourself, use${C_RESET} $(code "$(to_tilde_path "${target}")")${C_YELLOW}.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}To run cmai yourself, use${C_RESET} $(code "$(to_tilde_path "${target}")")${C_YELLOW}.${C_RESET}"
   fi
   remove_download
 
   if ! cmai_is_current; then
     error "failed to install $(code "cmai")."
     if command -v cmai >/dev/null 2>&1; then
-      echo "  ${C_RED}$(command -v cmai) comes first on the PATH and is an older version.${C_RESET}" >&2
+      echo "  ${C_RED}${M_ERROR}$(command -v cmai) comes first on the PATH and is an older version.${C_RESET}" >&2
     fi
-    echo "  ${C_RED}Please fix this and re-run this script. Aborting.${C_RESET}" >&2
+    echo "  ${C_RED}${M_ERROR}Please fix this and re-run this script. Aborting.${C_RESET}" >&2
     exit 1
   fi
-  echo "  ${C_GREEN}Done.${C_RESET}"
+  echo "  ${C_GREEN}${M_OK}Done.${C_RESET}"
 }
 
 step_install_cmai() {
@@ -1163,7 +1631,7 @@ step_install_cmai() {
   if cmai_is_current; then
     heading 1 "Install $(code "cmai")"
     echo
-    echo "  $(code "cmai") ${C_GREEN}is already installed.${C_RESET}"
+    echo "  ${C_GREEN}${M_OK}${C_RESET}$(code "cmai")${C_GREEN} is already installed.${C_RESET}"
     update_installed_cmai
     update_cmai_for_keychain
     return 0
@@ -1178,7 +1646,7 @@ step_install_cmai() {
     abort
   fi
   if ! download_cmai; then
-    echo "  ${C_RED}$(code "cmai")${C_RED} was not installed. Aborting.${C_RESET}"
+    echo "  ${C_RED}${M_ERROR}$(code "cmai")${C_RED} was not installed. Aborting.${C_RESET}"
     exit 1
   fi
   install_downloaded_cmai
@@ -1197,26 +1665,27 @@ update_installed_cmai() {
     return 0
   fi
   echo
-  echo "  Looking for a newer $(code "cmai")."
+  echo "  Looking for a newer $(code "cmai"):"
   if ! fetch_cmai; then
     warning "failed to download $(code "cmai")${C_YELLOW}. Keeping the installed cmai."
     remove_download
     return 0
   fi
+  quote_gap
   if cmp -s "${downloaded_script}" "${installed}"; then
     cmai_is_latest=1
-    echo "  $(code "cmai") ${C_GREEN}is the latest version.${C_RESET}"
+    detail "$(code "cmai")${C_GREEN} is the latest version."
     remove_download
     return 0
   fi
-  echo "  A newer $(code "cmai") is available."
+  detail "A newer $(code "cmai") is available."
   if ! check_downloaded_cmai; then
-    echo "  ${C_YELLOW}Keeping the installed cmai.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Keeping the installed cmai.${C_RESET}"
     remove_download
     return 0
   fi
   if ! ask "Update cmai?" y; then
-    echo "  ${C_YELLOW}Keeping the installed cmai.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Keeping the installed cmai.${C_RESET}"
     remove_download
     return 0
   fi
@@ -1227,25 +1696,25 @@ update_installed_cmai() {
 # The system keychain can keep the API key only if cmai takes the key from the
 # environment. If the installed cmai cannot do that, a newer one may.
 update_cmai_for_keychain() {
-  if cmai_reads_key_from_environment "${cmai_path}" || ! keychain_exists; then
+  if cmai_reads_key_from_environment "${cmai_path}" || ! keychain_available; then
     return 0
   fi
   echo
   echo "  The installed cmai cannot take the API key from the $(keychain_title)."
   if [ "${cmai_is_latest}" -eq 1 ]; then
-    echo "  ${C_YELLOW}The latest cmai cannot do this either. The API key stays in a file that only you can read.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}The latest cmai cannot do this either. The API key stays in a file that only you can read.${C_RESET}"
     return 0
   fi
   if ! ask "Look for a newer cmai?" y; then
     return 0
   fi
   if ! download_cmai; then
-    echo "  ${C_YELLOW}Keeping the installed cmai.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Keeping the installed cmai.${C_RESET}"
     remove_download
   elif cmai_reads_key_from_environment "${downloaded_script}"; then
     install_downloaded_cmai
   else
-    echo "  ${C_YELLOW}The latest cmai cannot do this either. The API key stays in a file that only you can read.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}The latest cmai cannot do this either. The API key stays in a file that only you can read.${C_RESET}"
     remove_download
   fi
 }
@@ -1271,7 +1740,7 @@ link_cmai() {
   link="${bin_dir}/cmai"
 
   if [ "${link}" -ef "${target}" ]; then
-    echo "    ${C_DIM}${link} already points to ${target}.${C_RESET}"
+    detail "${C_DIM}${link} already points to ${target}."
   elif [ "${PLATFORM}" = windows ]; then
     # Git Bash needs special rights for a symbolic link, so the command is a copy.
     action "$(code "cp ${target} ${link}")"
@@ -1298,13 +1767,14 @@ step_api_key() {
   heading 2 "Configure API key for $(code "cmai")"
   echo
   if [ -s "${CMAI_CONFIG_DIR}/config" ] || [ -s "${KEYCHAIN_FILE}" ]; then
-    echo "  ${C_GREEN}An API key is already stored.${C_RESET}"
+    echo "  ${C_GREEN}${M_OK}An API key is already stored.${C_RESET}"
     prompt='New API key (empty keeps the stored key, input is hidden)'
   fi
   if [ -n "${MITTWALD_AI_API_KEY:-}" ]; then
-    echo "  ${C_GREEN}Found key in${C_RESET} $(code "MITTWALD_AI_API_KEY")${C_GREEN}.${C_RESET}"
-    if ask "Use key from MITTWALD_AI_API_KEY" y; then
+    echo "  ${C_GREEN}${M_OK}Found a key in${C_RESET} $(code "MITTWALD_AI_API_KEY")${C_GREEN}: $(key_hint "${MITTWALD_AI_API_KEY}")${C_RESET}"
+    if ask "Use this key?" y; then
       cmai_api_key="${MITTWALD_AI_API_KEY}"
+      echo "  ${C_GREEN}${M_OK}Using the key from${C_RESET} $(code "MITTWALD_AI_API_KEY")${C_GREEN}.${C_RESET}"
     else
       prompt_api_key "${prompt}"
     fi
@@ -1325,7 +1795,7 @@ store_api_key() {
   local can_use_keychain=0
 
   question="Store the API key in the $(keychain_title)?"
-  if cmai_reads_key_from_environment "${cmai_path}" && keychain_exists; then
+  if cmai_reads_key_from_environment "${cmai_path}" && keychain_available; then
     can_use_keychain=1
     if [ -z "${key}" ] && [ -s "${key_file}" ]; then
       key="$(cat "${key_file}")"
@@ -1333,25 +1803,25 @@ store_api_key() {
     fi
   elif [ -z "${key}" ] && [ -s "${KEYCHAIN_FILE}" ]; then
     # The key is in the keychain, but this cmai cannot take it from there.
-    key="$(keychain_get || true)"
+    key="$(keychain_read || true)"
     cmai_api_key="${key}"
   fi
 
   if [ -z "${key}" ]; then
     if [ -s "${KEYCHAIN_FILE}" ]; then
-      keychain_api_key="$(keychain_get || true)"
-      echo "  ${C_GREEN}Keeping the API key in the $(keychain_title).${C_RESET}"
+      keychain_api_key="$(keychain_read || true)"
+      echo "  ${C_GREEN}${M_OK}Keeping the API key in the $(keychain_title).${C_RESET}"
     elif [ -s "${key_file}" ]; then
-      echo "  ${C_GREEN}Keeping the stored API key.${C_RESET}"
+      echo "  ${C_GREEN}${M_OK}Keeping the stored API key.${C_RESET}"
     else
-      echo "  ${C_YELLOW}No API key set. Re-run this installer to store a key later.${C_RESET}"
+      echo "  ${C_YELLOW}${M_NOTE}No API key set. Re-run this installer to store a key later.${C_RESET}"
     fi
     return 0
   fi
 
   if [ "${can_use_keychain}" -eq 1 ] && ask "${question}" y; then
     action "Storing API key in the $(keychain_title)"
-    if keychain_set "${key}" && [ "$(keychain_get || true)" = "${key}" ]; then
+    if with_progress quote 'Writing the key and reading it back' 'done' 'failed' keychain_store "${key}"; then
       if ! write_cmai_setting keychain "${KEYCHAIN_ENTRY}"; then
         die "failed to write $(code "${KEYCHAIN_FILE}"). Aborting."
       fi
@@ -1371,10 +1841,10 @@ store_api_key() {
       die "failed to store the API key. Aborting."
     fi
   else
-    echo "  ${C_GREEN}Keeping the stored API key.${C_RESET}"
+    echo "  ${C_GREEN}${M_OK}Keeping the stored API key.${C_RESET}"
   fi
   if [ -e "${KEYCHAIN_FILE}" ]; then
-    keychain_delete || true
+    with_progress line "Removing the API key from the $(keychain_title)" 'done' 'failed' keychain_delete || true
     rm -f "${KEYCHAIN_FILE}"
   fi
 }
@@ -1397,25 +1867,26 @@ step_configure_cmai() {
 
   store_api_key
 
-  preview_cmd="cmai --clear-model-options
-         --use-custom \"${AI_BASE_URL}\"
-         --model      \"${AI_MODEL}\"
-         --temperature 0.7
-         --top-p 0.8
-         --presence-penalty 1.5
-         --max-output-tokens ${AI_MAX_OUTPUT_TOKENS}
-         --extra-body '${AI_EXTRA_BODY}'
-         --print-config"
-  action "$(code "${preview_cmd}")"
+  preview_cmd="$(code "cmai --clear-model-options")
+$(code "     --use-custom        \"${AI_BASE_URL}\"")
+$(code "     --model             \"${AI_MODEL}\"")
+$(code "     --temperature       0.7")
+$(code "     --top-p             0.8")
+$(code "     --presence-penalty  1.5")
+$(code "     --max-output-tokens ${AI_MAX_OUTPUT_TOKENS}")
+$(code "     --extra-body        '${AI_EXTRA_BODY}'")
+$(code "     --print-config")"
+  action "${preview_cmd}"
+  quote_gap
   # With the key from the keychain in the environment, cmai reports the key as set.
-  if ! CMAI_API_KEY="${keychain_api_key}" "${cmai_cmd[@]}" < /dev/null 2>&1 | dim_output; then
+  if ! CMAI_API_KEY="${keychain_api_key}" "${cmai_cmd[@]}" < /dev/null 2>&1 | config_output; then
     die "failed to configure $(code "cmai"). Aborting."
   fi
   # cmai exits on --print-config before persisting --max-output-tokens, so save it directly.
   if ! write_cmai_setting max_output_tokens "${AI_MAX_OUTPUT_TOKENS}"; then
     die "failed to store the output token limit. Aborting."
   fi
-  echo "  ${C_GREEN}Done.${C_RESET}"
+  echo "  ${C_GREEN}${M_OK}Done.${C_RESET}"
 }
 
 step_template_dir() {
@@ -1426,8 +1897,8 @@ step_template_dir() {
   echo
   if [ -n "${existing_dir}" ]; then
     resolved_existing_dir="$(resolve_template_dir "${existing_dir}")"
-    printf '  %sTemplate directory:%s %s\n' "${C_BOLD}" "${C_RESET}" "$(code "${existing_dir}")"
-    if ask "Use configured directory" y; then
+    printf '  %sConfigured template directory:%s %s\n' "${C_BOLD}" "${C_RESET}" "$(code "${existing_dir}")"
+    if ask "Use this directory?" y; then
       if ! is_absolute_path "${resolved_existing_dir}"; then
         error "configured template directory must be an absolute path."
         if ! prompt_template_dir "${HOME}/.git-templates"; then
@@ -1445,6 +1916,7 @@ step_template_dir() {
         warn_template_dir_not_global
       fi
     fi
+    echo "  ${C_GREEN}${M_OK}Using the template directory${C_RESET} $(code "$(to_tilde_path "${template_dir}")")${C_GREEN}.${C_RESET}"
   else
     if ! prompt_template_dir "${HOME}/.git-templates"; then
       abort
@@ -1462,7 +1934,7 @@ step_template_dir() {
   if [ -n "${hooks_path}" ]; then
     echo
     warning "$(code "core.hooksPath")${C_YELLOW} is set to $(code "${hooks_path}")${C_YELLOW}."
-    echo "  ${C_YELLOW}Git then ignores the hooks of a repository, so the hook from the template will not run.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Git then ignores the hooks of a repository, so the hook from the template will not run.${C_RESET}"
   fi
 }
 
@@ -1555,11 +2027,11 @@ step_install_hook() {
     heading 5 "${title}"
     echo
     warning "$(code "${hook_path}")${C_YELLOW} already exists and was not written by this installer."
-    echo "  ${C_YELLOW}Overwriting removes your existing hook.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Overwriting removes your existing hook.${C_RESET}"
     echo
     if ! ask "Overwrite the existing hook?" n; then
-      echo "  ${C_YELLOW}Kept the existing hook. The commit message hook is not installed.${C_RESET}"
-      echo "  ${C_RED}To install it, move the existing hook away or merge both by hand, then re-run this script. Aborting.${C_RESET}"
+      echo "  ${C_YELLOW}${M_NOTE}Kept the existing hook. The commit message hook is not installed.${C_RESET}"
+      echo "  ${C_RED}${M_ERROR}To install it, move the existing hook away or merge both by hand, then re-run this script. Aborting.${C_RESET}"
       exit 1
     fi
   fi
@@ -1573,7 +2045,7 @@ step_install_hook() {
   if ! place_hook "${hook_path}"; then
     die "failed to write $(code "${hook_path}"). Aborting."
   fi
-  echo "  ${C_GREEN}Done.${C_RESET}"
+  echo "  ${C_GREEN}${M_OK}Done.${C_RESET}"
 }
 
 # Prints the hooks directory of the repository in the current directory and of
@@ -1627,7 +2099,7 @@ step_link_repos() {
     elif is_hook_link "${hook}" || is_installer_hook "${hook}"; then
       candidates+=("${hook}")
     fi
-  done < <(find_repo_hook_dirs)
+  done < <(with_progress line 'Looking for repositories with the hook' 'done' 'failed' find_repo_hook_dirs)
 
   heading 6 "${title}"
   echo
@@ -1635,9 +2107,9 @@ step_link_repos() {
     if [ "${#repo_dirs[@]}" -eq 0 ] && [ "${linked}" -eq 0 ]; then
       echo "  No repository to check. Pass $(code "--repos DIR") to look for repositories in DIR."
     elif links_hooks; then
-      echo "  ${C_GREEN}No repository has an old copy of the hook${C_RESET} (${linked} linked)."
+      echo "  ${C_GREEN}${M_OK}No repository has an old copy of the hook${C_RESET} (${linked} linked)."
     else
-      echo "  ${C_GREEN}No repository has an old copy of the hook${C_RESET} (${linked} up to date)."
+      echo "  ${C_GREEN}${M_OK}No repository has an old copy of the hook${C_RESET} (${linked} up to date)."
     fi
     return 0
   fi
@@ -1659,9 +2131,10 @@ step_link_repos() {
   done
   echo
   if ! ask "Run this step?" y; then
-    echo "  ${C_YELLOW}Skipped.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Skipped.${C_RESET}"
     return 0
   fi
+  echo
   if links_hooks; then
     action "$(code "ln -sf $(to_tilde_path "${HOOK_SOURCE}") <repository>/.git/hooks/prepare-commit-msg")"
   else
@@ -1673,7 +2146,7 @@ step_link_repos() {
       failed=$((failed + 1))
     fi
   done
-  echo "  ${C_GREEN}Done${C_RESET} ($((${#candidates[@]} - failed)) of ${#candidates[@]} repositories)."
+  echo "  ${C_GREEN}${M_OK}Done${C_RESET} ($((${#candidates[@]} - failed)) of ${#candidates[@]} repositories)."
 }
 
 step_editor() {
@@ -1686,19 +2159,19 @@ step_editor() {
   if [ "${kind}" = other ]; then
     heading 7 "Check how your editor aborts a commit"
     echo
-    echo "  ${C_YELLOW}Editor does not look like Vim (git uses${C_RESET} $(code "${editor:-no editor}")${C_YELLOW}).${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Editor does not look like Vim (git uses${C_RESET} $(code "${editor:-no editor}")${C_YELLOW}).${C_RESET}"
     echo
-    echo "  ${C_YELLOW}${C_BOLD}BE CAREFUL when using other editors:${C_RESET}"
-    echo "  ${C_YELLOW}If you intend to abort the commit, first comment out the${C_RESET}"
-    echo "  ${C_YELLOW}generated commit message, otherwise the commit WILL proceed.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}${C_BOLD}BE CAREFUL when using other editors:${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}If you intend to abort the commit, first comment out the${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}generated commit message, otherwise the commit WILL proceed.${C_RESET}"
     return 0
   fi
 
   if ! config_path="$(editor_config_path "${kind}")"; then
     heading 7 "Abort commit on :q! (only for Vim users)"
     echo
-    echo "  ${C_YELLOW}Neovim uses${C_RESET} $(code "init.lua")${C_YELLOW} here, so this script cannot add the snippet.${C_RESET}"
-    echo "  ${C_YELLOW}To abort a commit on :q, add the snippet by hand, for example inside${C_RESET} $(code "vim.cmd([[ ... ]])")${C_YELLOW}:${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Neovim uses${C_RESET} $(code "init.lua")${C_YELLOW} here, so this script cannot add the snippet.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}To abort a commit on :q, add the snippet by hand, for example inside${C_RESET} $(code "vim.cmd([[ ... ]])")${C_YELLOW}:${C_RESET}"
     echo
     print_snippet "${VIM_SNIPPET}"
     return 0
@@ -1708,7 +2181,7 @@ step_editor() {
   heading 7 "Append snippet to $(code "${display_config_path}") to abort commit on :q! (only for Vim users)"
   echo
   if [ -f "${config_path}" ] && grep -q 'augroup GitCommitAbort' "${config_path}"; then
-    echo "  ${C_GREEN}Snippet is already present in${C_RESET} $(code "${config_path}")${C_GREEN}; no change needed.${C_RESET}"
+    echo "  ${C_GREEN}${M_OK}Snippet is already present in${C_RESET} $(code "${config_path}")${C_GREEN}; no change needed.${C_RESET}"
     return 0
   fi
 
@@ -1723,12 +2196,13 @@ step_editor() {
   echo
   print_snippet "${new_file_content}${VIM_SNIPPET}"
   echo
-  echo "  ${C_YELLOW}${C_BOLD}INFO:${C_RESET}${C_YELLOW} This helps prevent accidentally committing a generated message.${C_RESET}"
+  echo "  ${C_YELLOW}${M_NOTE}${C_BOLD}INFO:${C_RESET}${C_YELLOW} This helps prevent accidentally committing a generated message.${C_RESET}"
   echo
   if ! ask "Run this step?" n; then
-    echo "  ${C_YELLOW}Skipped.${C_RESET}"
+    echo "  ${C_YELLOW}${M_NOTE}Skipped.${C_RESET}"
     return 0
   fi
+  echo
 
   if [ -f "${config_path}" ]; then
     action "Appending snippet to $(code "${config_path}")"
@@ -1742,7 +2216,7 @@ step_editor() {
     mkdir -p "$(dirname "${config_path}")"
     printf '%s\n' "${new_file_content}${VIM_SNIPPET}" > "${config_path}"
   fi
-  echo "  ${C_GREEN}Done.${C_RESET}"
+  echo "  ${C_GREEN}${M_OK}Done.${C_RESET}"
 }
 
 step_manual() {
@@ -1771,10 +2245,8 @@ main() {
   parse_args "$@"
   detect_platform
   check_requirements
+  banner
   trap cleanup EXIT
-
-  echo "${C_GREEN}Installer is running on $(platform_title).${C_RESET}"
-  echo "${C_DIM}All changes will be shown before they are applied.${C_RESET}"
 
   step_install_cmai
   step_api_key
@@ -1784,6 +2256,7 @@ main() {
   step_link_repos
   step_editor
   step_manual
+  outro
 }
 
 # Runs main, unless another script sources this file to use its functions.

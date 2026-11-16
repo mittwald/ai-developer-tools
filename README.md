@@ -82,6 +82,12 @@ To install or update without prompts, for example from a script, pass `--non-int
 curl -fsSL https://github.com/mittwald/ai-developer-tools/raw/refs/heads/main/install-git-commit-ai.sh | bash -s -- --non-interactive
 ```
 
+Without prompts, the installer takes the API key from `MITTWALD_AI_API_KEY`. Do not write the key into the command line, because your shell history keeps it. Read it without echo instead:
+
+```bash
+read -rs MITTWALD_AI_API_KEY && export MITTWALD_AI_API_KEY
+```
+
 ### Update the hook in your repositories
 
 `git init` does not replace a hook that a repository already has. A repository with a copy of the hook from an older installer keeps that copy. To replace these copies with links to the hook, pass the directories with your repositories to `--repos`:
@@ -117,7 +123,7 @@ cp ~/.git-templates/hooks/prepare-commit-msg "$(git rev-parse --git-path hooks)/
 
 - The hook sends the diff of your staged changes to mittwald AI. Do not stage secrets.
 - The hook never blocks a commit. It tries up to 3 times, with time limits of 30, 45 and 68 seconds. If the generation fails, the hook prints the reason and your editor opens without a generated message.
-- While you wait, the hook shows a status line such as `1/3 Reading between the hunks...`. The bold, fully colored part of the line grows with the elapsed share of the time limit. When the message is ready, the line becomes `Reading between the hunks... Read it all.`. Set `NO_COLOR=1` for plain text.
+- While you wait, the hook shows a status line such as `Reading between the hunks...`. The bold, fully colored part of the line grows with the elapsed share of the time limit. When the message is ready, the line becomes `Reading between the hunks... Read it all.`. Set `NO_COLOR=1` for plain text.
 - Press `Ctrl-C` to stop the generation and the commit.
 
 ## More tools coming soon
