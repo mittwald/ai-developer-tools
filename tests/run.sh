@@ -242,8 +242,10 @@ check "hook has 100 status texts" test "$(status_texts | wc -l | tr -d ' ')" = 1
 check "status texts are unique" test -z "$(status_texts | cut -d '|' -f 1 | sort | uniq -d)"
 check "status lines are ASCII and at most 72 characters" test -z "$(status_texts | LC_ALL=C awk -F '|' 'length($1) + 4 + length($2) > 72 || /[^ -~]/')"
 
-# with_progress, as on a terminal: the progress goes to a file instead.
+# with_progress, as on a terminal: the progress goes to a file instead. The
+# progress shows at once, so that a slow machine cannot hide it.
 PROGRESS_LOG="${SANDBOX}/progress.log"
+PROGRESS_DELAY_FRAMES=0
 progress_keeps_output() {
   test "$(PROGRESS_TTY="${PROGRESS_LOG}" with_progress line 'Testing' 'ok' 'failed' sh -c 'sleep 0.5; echo out')" = out
 }
