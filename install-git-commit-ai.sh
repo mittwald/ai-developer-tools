@@ -748,6 +748,16 @@ progress_text() {
 #      "failed" is an error in red; any other remark is a plain answer, such as
 #      "not available", in gray.
 # The rest is the command.
+# Stops the command of with_progress and its processes after Ctrl-C.
+# Runs from the INT trap of with_progress.
+# shellcheck disable=SC2329
+progress_interrupted() {
+  kill -TERM -- "-${PROGRESS_PID}" 2>/dev/null || kill -TERM "${PROGRESS_PID}" 2>/dev/null || true
+  wait "${PROGRESS_PID}" 2>/dev/null || true
+  printf '\r\033[K\033[?25h' >&9
+  exit 130
+}
+
 with_progress() {
   local place="$1" text="$2..." remark_ok="$3" remark_failed="$4"
   local prefix='  ' frame=0 shown=0 status=0 started="${SECONDS}" elapsed bright
@@ -758,11 +768,20 @@ with_progress() {
   fi
   [ "${place}" = quote ] && prefix="  ${C_CYAN}${BAR}${C_RESET} "
 
-  "$@" <&0 &
+  # With job control, the command runs in its own process group, so that
+  # Ctrl-C can stop it together with the processes that it started. A process
+  # group in the background must not read from the terminal, so a terminal on
+  # stdin is replaced with /dev/null.
+  set -m
+  if [ -t 0 ]; then
+    "$@" < /dev/null &
+  else
+    "$@" <&0 &
+  fi
   PROGRESS_PID=$!
+  set +m
   exec 9> "${PROGRESS_TTY}"
-  # Without job control, a command in the background ignores Ctrl-C.
-  trap 'kill "${PROGRESS_PID}" 2>/dev/null; printf "\r\033[K\033[?25h" >&9; exit 130' INT
+  trap 'progress_interrupted' INT
   while kill -0 "${PROGRESS_PID}" 2>/dev/null; do
     if [ "${frame}" -ge "${PROGRESS_DELAY_FRAMES}" ]; then
       [ "${shown}" -eq 1 ] || printf '\033[?25l' >&9
