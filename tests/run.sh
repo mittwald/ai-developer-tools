@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Tests install-git-commit-ai.sh and the hook. Runs with bash 3.2 or later on
-# Linux, macOS and Windows (Git Bash).
+# Tests install-git-commit-ai.sh, the hook and the git branch-ai command. Runs
+# with bash 3.2 or later on Linux, macOS and Windows (Git Bash).
 #
 # Usage: bash tests/run.sh
 #
@@ -223,24 +223,39 @@ else
   fi
 fi
 
-# Prints the status texts of the hook, one "text|remark" per line.
+# Prints the status texts of the script $1, one "text|remark" per line.
 status_texts() {
-  sed -n "/^MESSAGES=(/,/^)/s/^  '\\(.*\\)'\$/\\1/p" "${HOOK_FILE}"
+  sed -n "/^MESSAGES=(/,/^)/s/^  '\\(.*\\)'\$/\\1/p" "$1"
+}
+
+# True if the status texts of the script $1 are unique, ASCII and so short
+# that a status line has at most 72 characters.
+status_texts_fit() {
+  test -z "$(status_texts "$1" | cut -d '|' -f 1 | sort | uniq -d)" &&
+    test -z "$(status_texts "$1" | LC_ALL=C awk -F '|' 'length($1) + 4 + length($2) > 72 || /[^ -~]/')"
 }
 
 # ----------------------------------------------------------------------------
 # Scripts
 # ----------------------------------------------------------------------------
 HOOK_FILE="${SANDBOX}/hook"
+COMMAND_FILE="${SANDBOX}/git-branch-ai"
 hook_content > "${HOOK_FILE}"
+branch_command_content > "${COMMAND_FILE}"
 check "installer has valid syntax" "${BASH}" -n "${INSTALLER}"
 check "hook has valid syntax" "${BASH}" -n "${HOOK_FILE}"
+check "git branch-ai has valid syntax" "${BASH}" -n "${COMMAND_FILE}"
 if command -v shellcheck >/dev/null 2>&1; then
-  check "shellcheck finds nothing" shellcheck -x "${INSTALLER}" "${HOOK_FILE}" "${ROOT}/tests/run.sh" "${FIXTURE}"
+  check "shellcheck finds nothing" shellcheck -x "${INSTALLER}" "${HOOK_FILE}" "${COMMAND_FILE}" "${ROOT}/tests/run.sh" "${FIXTURE}"
 fi
-check "hook has 100 status texts" test "$(status_texts | wc -l | tr -d ' ')" = 100
-check "status texts are unique" test -z "$(status_texts | cut -d '|' -f 1 | sort | uniq -d)"
-check "status lines are ASCII and at most 72 characters" test -z "$(status_texts | LC_ALL=C awk -F '|' 'length($1) + 4 + length($2) > 72 || /[^ -~]/')"
+check "hook has 100 status texts" test "$(status_texts "${HOOK_FILE}" | wc -l | tr -d ' ')" = 100
+check "status texts of the hook are unique, ASCII and at most 72 characters" status_texts_fit "${HOOK_FILE}"
+check "git branch-ai has 50 status texts" test "$(status_texts "${COMMAND_FILE}" | wc -l | tr -d ' ')" = 50
+check "status texts of git branch-ai are unique, ASCII and at most 72 characters" status_texts_fit "${COMMAND_FILE}"
+no_shared_status_text() {
+  test -z "$({ status_texts "${HOOK_FILE}"; status_texts "${COMMAND_FILE}"; } | cut -d '|' -f 1 | sort | uniq -d)"
+}
+check "hook and git branch-ai have their own status texts" no_shared_status_text
 
 # with_progress, as on a terminal: the progress goes to a file instead. The
 # progress shows at once, so that a slow machine cannot hide it.
@@ -263,6 +278,37 @@ check "progress keeps the exit status of the command" progress_keeps_status
 check "progress reports a failure" contains "${PROGRESS_LOG}" "Failing... failed"
 check "progress keeps the stdin of the command" progress_keeps_stdin
 
+# The picker, with the keys from a file instead of the terminal.
+# $1 = keys, $2 = the checked features at the end
+PICKER_LOG="${SANDBOX}/picker.log"
+picker_gives() {
+  printf '%b' "$1" > "${SANDBOX}/keys"
+  PICKER_CHECKED=(1 1)
+  PICKER_INPUT="${SANDBOX}/keys" pick_features > "${PICKER_LOG}"
+  test "${PICKER_CHECKED[*]}" = "$2"
+}
+check "picker starts with every feature checked" picker_gives '\n' '1 1'
+check "picker lists the features" contains "${PICKER_LOG}" "Branch names"
+check "picker unchecks a feature with space" picker_gives ' \n' '0 1'
+check "picker moves with the arrow keys" picker_gives '\033[B \n' '1 0'
+check "picker moves from the first to the last feature" picker_gives '\033[A \n' '1 0'
+check "picker moves with j and k" picker_gives 'jk \n' '0 1'
+check "picker keeps one feature checked" picker_gives ' j \n \n' '0 1'
+check "picker names the reason" contains "${PICKER_LOG}" "Check at least one feature."
+check "picker stops at the end of the keys" picker_gives 'j ' '1 0'
+
+picker_checklist_layout() (
+  NO_COLOR=1 setup_colors
+  FANCY=1
+  PICKER_CHECKED=(1 0)
+  test "$(draw_picker 1 '')" = "$(printf '\r%s\033[K\n' \
+    '  Set up' \
+    '    [x] Commit messages  git commit starts with a generated message' \
+    '  ❯ [ ] Branch names     git branch-ai names and creates a branch' \
+    '  ↑/↓ move · Space toggle · Enter confirm')"
+)
+check "picker shows cli-kit checklist rows and footer" picker_checklist_layout
+
 check "content check accepts the stand-in for cmai" test -z "$(cmai_script_findings "${FIXTURE}")"
 cp "${FIXTURE}" "${SANDBOX}/tampered.sh"
 # shellcheck disable=SC2016
@@ -283,7 +329,8 @@ make_cmai_repo "${FIXTURE}"
 export MITTWALD_AI_API_KEY="${TEST_KEY}"
 check "installation succeeds" run_installer
 unset MITTWALD_AI_API_KEY
-check "installation reaches the last step" contains "${LOG}" "Step 8"
+check "installation prints both selected features" contains "${LOG}" "Selected features: Commit messages, Branch names"
+check "installation reaches the last step" contains "${LOG}" "Step 10"
 check "cmai is installed" test -x "${HOME}/git-commit-ai/git-commit.sh"
 check "cmai is on the PATH" test "$(command -v cmai)" = "${CMAI_BIN_DIR}/cmai"
 check "hook is in the template directory" test "$(cat "${TEMPLATE_HOOK}")" = "$(hook_content)"
@@ -294,6 +341,10 @@ fi
 # shellcheck disable=SC2088
 check "git knows the template directory" test "$(git config --global --get init.templatedir)" = '~/.git-templates'
 check "cmai is configured for mittwald AI" contains "${HOME}/.config/git-commit-ai/base_url" "llm.aihosting.mittwald.de"
+check "git branch-ai is installed" test "$(cat "${BRANCH_COMMAND_SOURCE}")" = "$(branch_command_content)"
+check "git branch-ai is on the PATH" test "$(command -v git-branch-ai)" = "${CMAI_BIN_DIR}/git-branch-ai"
+# shellcheck disable=SC2088
+check "git has the alias" test "$(git config --global --get alias.bai)" = '!~/git-commit-ai/git-branch-ai'
 log_hides_key() {
   ! contains "${LOG}" "${TEST_KEY}"
 }
@@ -365,6 +416,60 @@ check "cmai ran until the time limit" test "${beats}" -gt 2
 unset FAKE_CMAI_MODE FAKE_CMAI_HEARTBEAT
 
 # ----------------------------------------------------------------------------
+# git branch-ai
+# ----------------------------------------------------------------------------
+BRANCH_OUT="${SANDBOX}/branch.out"
+# Runs the command in the repository. The name goes to BRANCH_OUT, the status
+# to the log. $@ = git command and options.
+in_repo() {
+  (cd "${REPO}" && git "$@") > "${BRANCH_OUT}" 2> "${LOG}" < /dev/null
+}
+branch_ai_fails() {
+  ! in_repo branch-ai "$@"
+}
+current_branch() {
+  git -C "${REPO}" symbolic-ref --short HEAD
+}
+
+make_repo "${REPO}"
+git -C "${REPO}" commit -q -m initial
+first_branch="$(current_branch)"
+echo change >> "${REPO}/file.txt"
+check "git branch-ai stops without staged changes" branch_ai_fails
+check "git branch-ai names the reason" contains "${LOG}" "No branch name generated: there are no staged changes"
+check "git branch-ai --print --unstaged succeeds" in_repo branch-ai --print --unstaged
+check "git branch-ai --unstaged uses the unstaged changes" test "$(cat "${BRANCH_OUT}")" = feat/generated-from-unstaged
+check "git branch-ai --print creates no branch" test "$(current_branch)" = "${first_branch}"
+check "git branch-ai --print --diff succeeds" in_repo branch-ai --print --diff HEAD
+check "git branch-ai --diff uses the diff" test "$(cat "${BRANCH_OUT}")" = feat/generated-from-diff-HEAD
+check "git branch-ai stops at --unstaged with --diff" branch_ai_fails --unstaged --diff HEAD
+check "git branch-ai stops at an unknown option" branch_ai_fails --other
+
+git -C "${REPO}" add file.txt
+check "the alias git bai succeeds" in_repo bai --print
+check "the alias runs git branch-ai" test "$(cat "${BRANCH_OUT}")" = feat/generated-from-staged
+check "git branch-ai succeeds" in_repo branch-ai
+check "git branch-ai ends with the status text and a remark" hook_reports_done
+check "git branch-ai creates the branch and switches to it" test "$(current_branch)" = feat/generated-from-staged
+check "git branch-ai keeps the changes staged" test "$(git -C "${REPO}" diff --cached --name-only)" = file.txt
+check "git branch-ai stops at a branch that exists" branch_ai_fails
+check "git branch-ai names the branch that exists" contains "${LOG}" 'No branch created: the branch "feat/generated-from-staged" already exists'
+
+export FAKE_CMAI_MODE=quoted
+check "git branch-ai --print succeeds for a name in quotes" in_repo branch-ai --print
+check "git branch-ai removes the quotes" test "$(cat "${BRANCH_OUT}")" = feat/quoted-name
+export FAKE_CMAI_MODE=invalid
+check "git branch-ai stops at text that is no branch name" branch_ai_fails
+check "git branch-ai reports the text" contains "${LOG}" "No branch name generated: cmai returned no valid branch name"
+check "git branch-ai shows the text" contains "${LOG}" "Sure! Here is a branch name"
+export FAKE_CMAI_MODE=fail
+check "git branch-ai stops when cmai fails" branch_ai_fails
+check "git branch-ai reports that cmai failed" contains "${LOG}" "No branch name generated: cmai failed (exit 1)"
+check "git branch-ai shows the error of cmai" contains "${LOG}" "API request failed (HTTP 401): invalid key"
+unset FAKE_CMAI_MODE
+check "git branch-ai created no other branch" test "$(git -C "${REPO}" branch --format='%(refname:short)' | wc -l | tr -d ' ')" = 2
+
+# ----------------------------------------------------------------------------
 # Second run and other states
 # ----------------------------------------------------------------------------
 # The second run reads the installer from a pipe, as `curl ... | bash` does.
@@ -372,7 +477,9 @@ run_installer_from_pipe() {
   "${BASH}" -s -- --non-interactive < "${INSTALLER}" > "${LOG}" 2>&1
 }
 check "second installation succeeds from a pipe" run_installer_from_pipe
-check "second installation keeps the hook" contains "${LOG}" "is already up to date"
+check "second installation keeps the hook" contains "${LOG}" "prepare-commit-msg is already up to date"
+check "second installation keeps git branch-ai" contains "${LOG}" "git-branch-ai is already up to date"
+check "second installation keeps the alias" contains "${LOG}" "The alias git bai is already set"
 check "second installation finds that cmai is the latest" contains "${LOG}" "is the latest version"
 
 # A newer cmai in the repository
@@ -457,6 +564,51 @@ check "repository with its own core.hooksPath is left alone" contains "${REPOS}/
 check "second installation with --repos succeeds" run_installer --repos "${REPOS}"
 check "second installation finds no old copy" contains "${LOG}" "No repository has an old copy of the hook (1 "
 check "--repos without a directory fails" installer_fails_with --repos
+
+# ----------------------------------------------------------------------------
+# Features
+# ----------------------------------------------------------------------------
+lacks() {
+  ! contains "$1" "$2"
+}
+remove_branch_command() {
+  rm -f "${BRANCH_COMMAND_SOURCE}" "${CMAI_BIN_DIR}/git-branch-ai"
+  git config --global --unset alias.bai || true
+}
+
+remove_branch_command
+check "installation of the commit messages alone succeeds" run_installer --features commit
+check "installation of the commit messages has 8 steps" contains "${LOG}" "Step 8"
+check "installation of the commit messages has no other step" lacks "${LOG}" "Step 9"
+check "git branch-ai is not installed" test ! -e "${BRANCH_COMMAND_SOURCE}"
+check "git has no alias" test -z "$(git config --global --get alias.bai || true)"
+
+rm -f "${TEMPLATE_HOOK}"
+check "installation of the branch names alone succeeds" run_installer --features branch
+check "installation of the branch names has 5 steps" contains "${LOG}" "Step 5"
+check "installation of the branch names has no other step" lacks "${LOG}" "Step 6"
+check "hook is not installed" test ! -e "${TEMPLATE_HOOK}"
+check "git branch-ai is installed again" test "$(command -v git-branch-ai)" = "${CMAI_BIN_DIR}/git-branch-ai"
+check "--features with an unknown feature fails" installer_fails_with --features commit,other
+check "--features without a feature fails" installer_fails_with --features
+check "installation of both features succeeds" run_installer --features branch,commit
+check "hook is installed again" test "$(cat "${TEMPLATE_HOOK}")" = "$(hook_content)"
+
+# An alias and a command from another source
+git config --global alias.bai 'branch --all'
+rm -f "${CMAI_BIN_DIR}/git-branch-ai"
+printf '#!/bin/sh\necho "command of the user"\n' > "${CMAI_BIN_DIR}/git-branch-ai"
+chmod +x "${CMAI_BIN_DIR}/git-branch-ai"
+check "installation with an alias and a command from another source succeeds" run_installer
+check "installation names the alias from another source" contains "${LOG}" "alias.bai is already set to branch --all"
+check "alias from another source is kept" test "$(git config --global --get alias.bai)" = 'branch --all'
+check "installation names the command from another source" contains "${LOG}" "git-branch-ai already exists and was not written by this installer"
+check "command from another source is kept" contains "${CMAI_BIN_DIR}/git-branch-ai" "command of the user"
+remove_branch_command
+check "installation after their removal succeeds" run_installer
+# shellcheck disable=SC2088
+check "alias is set again" test "$(git config --global --get alias.bai)" = '!~/git-commit-ai/git-branch-ai'
+check "command is on the PATH again" test "$(cat "${CMAI_BIN_DIR}/git-branch-ai")" = "$(branch_command_content)"
 
 if [ "${use_keychain}" -eq 1 ]; then
   # A key in the key file, as an installation before the keychain support left it.
