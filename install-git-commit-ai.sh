@@ -2701,7 +2701,8 @@ step_branch_alias() {
   fi
   echo
   action "$(code "git config --global ${name} '${value}'")"
-  if ! git config --global "${name}" "${value}"; then
+  # The alias is shell code. Keep Git Bash from converting it to a Windows path.
+  if ! MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' git config --global "${name}" "${value}"; then
     die "failed to set $(code "${name}"). Aborting."
   fi
   echo "  ${C_GREEN}${M_OK}Done.${C_RESET}"
